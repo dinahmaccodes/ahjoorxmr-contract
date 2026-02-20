@@ -103,6 +103,10 @@ Ahjoor's smart contracts handle:
 - **Automated Payouts**: Scheduled recipients claim the full pot when their round is due
 - **Round Progression**: Time-based round advancement using Stellar ledger timestamps
 
+## State Archival & TTL
+
+Stellar/Soroban utilizes State Archival to manage network storage footprint. Idle contracts and data entries will eventually be archived. Ahjoor handles state preservation automatically when members interact with it (e.g. `init` or `contribute`). However, if the contract goes unused for a long period, participants should occasionally call the `bump_storage()` function to manually extend the time-to-live (TTL) of the contract's instance storage and avoid sudden state archival.
+
 ## Technology Stack
 
 - **Blockchain**: Stellar (Soroban smart contracts)

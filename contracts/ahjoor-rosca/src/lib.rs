@@ -3,6 +3,9 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, Env, Map, Vec,
 };
 
+const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_000;
+const INSTANCE_BUMP_AMOUNT: u32 = 120_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
 pub enum PayoutStrategy {
@@ -140,6 +143,10 @@ impl AhjoorContract {
             (symbol_short!("init"),),
             (member_count, contribution_amount),
         );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     pub fn contribute(env: Env, contributor: Address) {
@@ -200,6 +207,10 @@ impl AhjoorContract {
         if paid_members.len() == members.len() {
             Self::complete_round_payout(&env, &paid_members, amount, client);
         }
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     pub fn close_round(env: Env) {
@@ -470,6 +481,12 @@ impl AhjoorContract {
                 .set(&DataKey::ApprovedTokens, &new_approved_tokens);
             env.events().publish((symbol_short!("tok_rmv"),), token);
         }
+    }
+
+    pub fn bump_storage(env: Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     // --- NEW READ INTERFACE FUNCTIONS ---

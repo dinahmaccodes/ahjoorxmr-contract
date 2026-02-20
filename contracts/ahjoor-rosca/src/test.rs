@@ -1202,6 +1202,47 @@ fn test_init_with_approved_token() {
     setup.client.add_approved_token(&setup.token_admin);
 
     // Should succeed because token_admin is in the whitelist
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Token not approved")]
+fn test_init_with_unapproved_token_panics() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone()];
+    
+    // Set admin
+    setup.env.as_contract(&setup.client.address, || {
+        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
+    });
+    
+    // Add some other token to whitelist
+    let other_token = Address::generate(&setup.env);
+    setup.client.add_approved_token(&other_token);
+
+    // Should fail because token_admin is not in the whitelist
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+}
+
 // --- NEW EDGE CASE AND FAILURE PATH TESTS (Issue #9) ---
 
 #[test]
@@ -1310,24 +1351,6 @@ fn test_payout_correct_member_n_group() {
         &None,
         &0,
     );
-}
-
-#[test]
-#[should_panic(expected = "Token not approved")]
-fn test_init_with_unapproved_token_panics() {
-    let setup = setup_env();
-    let u1 = Address::generate(&setup.env);
-    let members = vec![&setup.env, u1.clone()];
-    let random_token = Address::generate(&setup.env);
-    
-    // Admins restrict to only allowing `random_token`
-    setup.env.as_contract(&setup.client.address, || {
-        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
-    });
-    setup.client.add_approved_token(&random_token);
-
-    // Try to init with `setup.token_admin` which is NOT approved
-    // Should panic due to "Token not approved"
 
     // Round 0: u1 gets the pot (4 * 100 = 400)
     setup.client.contribute(&u1);
@@ -1501,7 +1524,7 @@ fn test_get_state_lifecycle_details() {
     );
 
     // Before any contributions
-    let (round, paid, deadline, strategy) = setup.client.get_state();
+    let (round, paid, deadline, strategy, _) = setup.client.get_state();
     assert_eq!(round, 0);
     assert_eq!(paid.len(), 0);
     assert_eq!(deadline, 3700); // 100 + 3600
@@ -1509,7 +1532,7 @@ fn test_get_state_lifecycle_details() {
 
     // During a round
     setup.client.contribute(&u1);
-    let (round_mid, paid_mid, deadline_mid, _) = setup.client.get_state();
+    let (round_mid, paid_mid, deadline_mid, _, _) = setup.client.get_state();
     assert_eq!(round_mid, 0);
     assert_eq!(paid_mid.len(), 1);
     assert!(paid_mid.contains(&u1));
@@ -1519,8 +1542,39 @@ fn test_get_state_lifecycle_details() {
     setup.env.ledger().set_timestamp(200); // Advance time slightly
     setup.client.contribute(&u2); // Completes the round
     
-    let (round_after, paid_after, deadline_after, _) = setup.client.get_state();
+    let (round_after, paid_after, deadline_after, _, _) = setup.client.get_state();
     assert_eq!(round_after, 1);
     assert_eq!(paid_after.len(), 0);
     assert_eq!(deadline_after, 3800); // 200 + 3600
+}
+
+#[test]
+fn test_bump_storage() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone()];
+    
+    setup.token_admin_client.mint(&u1, &1000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Call bump_storage
+    setup.client.bump_storage();
+
+    // Advance ledger far into the future
+    setup.env.ledger().set_sequence_number(setup.env.ledger().sequence() + 50_000);
+
+    // Verify contract is still accessible
+    let (round, paid, _, _, _) = setup.client.get_state();
+    assert_eq!(round, 0);
+    assert_eq!(paid.len(), 0);
 }
