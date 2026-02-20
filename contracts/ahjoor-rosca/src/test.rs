@@ -1,5 +1,5 @@
 #![cfg(test)]
-
+extern crate alloc;
 use super::*;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
@@ -7,6 +7,39 @@ use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
     vec, Address, Env, IntoVal,
 };
+
+pub struct TestSetup<'a> {
+    pub env: Env,
+    pub client: AhjoorContractClient<'a>,
+    pub admin: Address,
+    pub token_admin: Address,
+    pub token_client: TokenClient<'a>,
+    pub token_admin_client: TokenAdminClient<'a>,
+}
+
+fn setup_env<'a>() -> TestSetup<'a> {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_admin);
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+
+    TestSetup {
+        env,
+        client,
+        admin,
+        token_admin,
+        token_client,
+        token_admin_client,
+    }
+}
 
 #[test]
 fn test_rosca_flow_with_time_locks() {
@@ -1128,4 +1161,309 @@ fn test_remove_member_who_already_received_payout() {
         "u2 should have received the payout, got: {}",
         u2_balance
     );
+}
+
+// --- NEW EDGE CASE AND FAILURE PATH TESTS (Issue #9) ---
+
+#[test]
+#[should_panic(expected = "Already initialized")]
+fn test_init_twice_panics() {
+    let setup = setup_env();
+    let members = vec![&setup.env, Address::generate(&setup.env), Address::generate(&setup.env)];
+    
+    // First init
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Second init should panic
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Not a member")]
+fn test_contribute_non_member_panics() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let non_member = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+    
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Non-member trying to contribute
+    setup.client.contribute(&non_member);
+}
+
+#[test]
+#[should_panic(expected = "Already contributed for this round")]
+fn test_contribute_twice_panics() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+    
+    setup.token_admin_client.mint(&u1, &1000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // First contribution
+    setup.client.contribute(&u1);
+    
+    // Second contribution by the same member in the same round should panic
+    setup.client.contribute(&u1);
+}
+
+#[test]
+fn test_payout_correct_member_n_group() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let u3 = Address::generate(&setup.env);
+    let u4 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone(), u3.clone(), u4.clone()];
+    
+    for u in [&u1, &u2, &u3, &u4] {
+        setup.token_admin_client.mint(u, &1000);
+    }
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Round 0: u1 gets the pot (4 * 100 = 400)
+    setup.client.contribute(&u1);
+    setup.client.contribute(&u2);
+    setup.client.contribute(&u3);
+    setup.client.contribute(&u4);
+    
+    // u1 history: 1000 - 100 + 400 = 1300
+    assert_eq!(setup.token_client.balance(&u1), 1300);
+
+    // Round 1: u2 gets the pot
+    setup.client.contribute(&u1);
+    setup.client.contribute(&u2);
+    setup.client.contribute(&u3);
+    setup.client.contribute(&u4);
+
+    // u2 history: 1000 - 100(R0) - 100(R1) + 400 = 1200
+    assert_eq!(setup.token_client.balance(&u2), 1200);
+
+    // Round 2: u3 gets the pot
+    setup.client.contribute(&u1);
+    setup.client.contribute(&u2);
+    setup.client.contribute(&u3);
+    setup.client.contribute(&u4);
+
+    // u3 history: 1000 - 100(R0) - 100(R1) - 100(R2) + 400 = 1100
+    assert_eq!(setup.token_client.balance(&u3), 1100);
+    
+    // Round 3: u4 gets the pot
+    setup.client.contribute(&u1);
+    setup.client.contribute(&u2);
+    setup.client.contribute(&u3);
+    setup.client.contribute(&u4);
+
+    // u4 history: 1000 - 100(R0) - 100(R1) - 100(R2) - 100(R3) + 400 = 1000
+    assert_eq!(setup.token_client.balance(&u4), 1000);
+        
+    // u1 loses 100 in R1, R2, R3 (total 300) -> 1300 - 300 = 1000
+    assert_eq!(setup.token_client.balance(&u1), 1000);
+}
+
+#[test]
+fn test_contract_balance_zero_after_round() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+    
+    for u in [&u1, &u2] {
+        setup.token_admin_client.mint(u, &1000);
+    }
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Before contributions, balance is 0
+    let current_contract_address = setup.client.address.clone();
+    assert_eq!(setup.token_client.balance(&current_contract_address), 0);
+
+    // u1 contributes, balance is 100
+    setup.client.contribute(&u1);
+    assert_eq!(setup.token_client.balance(&current_contract_address), 100);
+
+    // u2 contributes, finishes round, payout dispatched, balance should be 0
+    setup.client.contribute(&u2);
+    assert_eq!(setup.token_client.balance(&current_contract_address), 0);
+}
+
+#[test]
+fn test_single_member_rosca() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone()];
+    
+    setup.token_admin_client.mint(&u1, &1000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Single member contributes, should immediately complete round and payout to self
+    setup.client.contribute(&u1);
+    
+    // Balance remains 1000 (spent 100, received 100 immediately)
+    assert_eq!(setup.token_client.balance(&u1), 1000);
+    
+    // State should now be round 1
+    let state = setup.client.get_state();
+    assert_eq!(state.0, 1);
+}
+
+#[test]
+fn test_large_group_rosca() {
+    let setup = setup_env();
+    let mut member_addresses = alloc::vec::Vec::new();
+    let mut members = soroban_sdk::Vec::new(&setup.env);
+    
+    // 10 members
+    for _ in 0..10 {
+        let addr = Address::generate(&setup.env);
+        setup.token_admin_client.mint(&addr, &2000); // Plenty of tokens
+        member_addresses.push(addr.clone());
+        members.push_back(addr.clone());
+    }
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Do 1 full cycle (10 rounds)
+    for round_idx in 0..10 {
+        for m in member_addresses.iter() {
+            setup.client.contribute(m);
+        }
+    }
+    
+    // At the end of 10 rounds, everyone should have exactly back what they started with
+    for m in member_addresses.iter() {
+        assert_eq!(setup.token_client.balance(m), 2000);
+    }
+    
+    let state = setup.client.get_state();
+    assert_eq!(state.0, 10); // completed 10 rounds
+}
+
+#[test]
+fn test_get_state_lifecycle_details() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+    
+    for u in [&u1, &u2] {
+        setup.token_admin_client.mint(u, &1000);
+    }
+
+    // Setup initially uses ledger timestamp 0 internally, so duration 3600 sets deadline to 3600.
+    setup.env.ledger().set_timestamp(100);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Before any contributions
+    let (round, paid, deadline, strategy) = setup.client.get_state();
+    assert_eq!(round, 0);
+    assert_eq!(paid.len(), 0);
+    assert_eq!(deadline, 3700); // 100 + 3600
+    assert_eq!(strategy, PayoutStrategy::RoundRobin);
+
+    // During a round
+    setup.client.contribute(&u1);
+    let (round_mid, paid_mid, deadline_mid, _) = setup.client.get_state();
+    assert_eq!(round_mid, 0);
+    assert_eq!(paid_mid.len(), 1);
+    assert!(paid_mid.contains(&u1));
+    assert_eq!(deadline_mid, 3700);
+
+    // After a round
+    setup.env.ledger().set_timestamp(200); // Advance time slightly
+    setup.client.contribute(&u2); // Completes the round
+    
+    let (round_after, paid_after, deadline_after, _) = setup.client.get_state();
+    assert_eq!(round_after, 1);
+    assert_eq!(paid_after.len(), 0);
+    assert_eq!(deadline_after, 3800); // 200 + 3600
 }
