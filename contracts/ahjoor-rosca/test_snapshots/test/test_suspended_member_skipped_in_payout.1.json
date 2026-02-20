@@ -782,6 +782,39 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "RoundHistory"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "amount"
+                                  },
+                                  "val": {
+                                    "i128": "740"
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "recipient"
+                                  },
+                                  "val": {
+                                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Strategy"
                             }
                           ]

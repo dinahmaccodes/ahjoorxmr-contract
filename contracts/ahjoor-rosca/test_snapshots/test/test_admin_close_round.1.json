@@ -285,6 +285,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "RoundHistory"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Strategy"
                             }
                           ]

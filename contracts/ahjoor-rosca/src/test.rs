@@ -473,7 +473,7 @@ fn test_single_defaulter_penalty() {
 
     // Only user1 contributes
     client.contribute(&user1);
-    
+
     // Wait for deadline to pass
     env.ledger().set_timestamp(3601);
     client.close_round();
@@ -481,7 +481,7 @@ fn test_single_defaulter_penalty() {
     // Check events after close_round
     let events_after_close = env.events().all();
     assert!(events_after_close.len() > 0, "No events after close_round");
-    
+
     // Admin penalizes user2 (defaulter) - this should work since user2 didn't contribute
     client.penalise_defaulter(&user2);
 
@@ -528,7 +528,7 @@ fn test_multiple_defaulters_penalty() {
 
     // Only user1 contributes
     client.contribute(&user1);
-    
+
     // Wait for deadline to pass
     env.ledger().set_timestamp(3601);
     client.close_round();
@@ -661,11 +661,15 @@ fn test_suspended_member_skipped_in_payout() {
     // user3 should receive the payout (including penalty funds)
     let user3_balance_after = token_client.balance(&user3);
     let payout_received = user3_balance_after - user3_balance_before + 100; // +100 for contribution
-    
+
     // Debug: let's see what the actual payout is
     // Expected: 300 (contributions) + accumulated penalties
     // Let's just check that user3 received more than the base contributions
-    assert!(payout_received > 300, "Payout should include penalty funds, got: {}", payout_received);
+    assert!(
+        payout_received > 300,
+        "Payout should include penalty funds, got: {}",
+        payout_received
+    );
 }
 
 #[test]
@@ -765,4 +769,117 @@ fn test_cannot_penalise_non_defaulter() {
 
     // Try to penalise user1 who contributed
     client.penalise_defaulter(&user1);
+}
+
+#[test]
+fn test_read_interface_lifecycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+
+    let u1 = Address::generate(&env);
+    let u2 = Address::generate(&env);
+    let members = vec![&env, u1.clone(), u2.clone()];
+
+    token_admin_client.mint(&u1, &1000);
+    token_admin_client.mint(&u2, &1000);
+
+    // 1. STAGE: Post-Initialization
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    let info = client.get_group_info();
+    assert_eq!(info.members.len(), 2);
+    assert_eq!(info.current_round, 0);
+    assert_eq!(info.next_recipient, u1); // Round 0 recipient
+    assert_eq!(client.get_round_history().len(), 0);
+
+    // 2. STAGE: Mid-Round Contribution
+    client.contribute(&u1);
+
+    // Verify member status
+    assert_eq!(client.get_member_status(&u1), true);
+    assert_eq!(client.get_member_status(&u2), false);
+
+    // Verify GroupInfo updates paid_members
+    let info_mid = client.get_group_info();
+    assert_eq!(info_mid.paid_members.len(), 1);
+    assert!(info_mid.paid_members.contains(&u1));
+
+    // 3. STAGE: Post-Payout (Round 0 Complete)
+    client.contribute(&u2); // This triggers complete_round_payout
+
+    // Verify History
+    let history = client.get_round_history();
+    assert_eq!(history.len(), 1);
+    let record = history.get(0).unwrap();
+    assert_eq!(record.recipient, u1);
+    assert_eq!(record.amount, 200);
+
+    // Verify New Round State
+    let info_new_round = client.get_group_info();
+    assert_eq!(info_new_round.current_round, 1);
+    assert_eq!(info_new_round.next_recipient, u2); // Now it's u2's turn
+    assert_eq!(info_new_round.paid_members.len(), 0); // Should be reset
+}
+
+#[test]
+fn test_member_status_resets_after_round() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+
+    let u1 = Address::generate(&env);
+    let u2 = Address::generate(&env); // Use 2 members so the round doesn't auto-close
+    let members = vec![&env, u1.clone(), u2.clone()];
+
+    token_admin_client.mint(&u1, &1000);
+    token_admin_client.mint(&u2, &1000);
+
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // 1. u1 contributes. Round is NOT over because u2 hasn't paid.
+    client.contribute(&u1);
+    assert_eq!(client.get_member_status(&u1), true);
+    assert_eq!(client.get_group_info().current_round, 0);
+
+    // 2. u2 contributes. This completes Round 0 and starts Round 1.
+    client.contribute(&u2);
+
+    // 3. Now verify status is reset for the new round.
+    assert_eq!(client.get_group_info().current_round, 1);
+    assert_eq!(client.get_member_status(&u1), false);
+    assert_eq!(client.get_member_status(&u2), false);
 }

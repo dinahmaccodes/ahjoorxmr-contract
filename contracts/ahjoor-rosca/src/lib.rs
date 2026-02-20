@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Vec, Map};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Map, Vec,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -8,23 +10,43 @@ pub enum PayoutStrategy {
     AdminAssigned = 1,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupInfo {
+    pub members: Vec<Address>,
+    pub contribution_amount: i128,
+    pub token: Address,
+    pub current_round: u32,
+    pub total_rounds: u32,
+    pub paid_members: Vec<Address>,
+    pub next_recipient: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutRecord {
+    pub recipient: Address,
+    pub amount: i128,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
-    Admin,           // Address
-    Members,         // Vec<Address>
-    PayoutOrder,     // Vec<Address>
-    Strategy,        // PayoutStrategy
-    ContributionAmt, // i128
-    Token,           // Address
-    CurrentRound,    // u32
-    PaidMembers,     // Vec<Address>
-    RoundDuration,   // u64
-    RoundDeadline,   // u64
-    Defaulters,      // Vec<Address>
-    PenaltyAmount,   // i128
-    DefaultCount,    // Map<Address, u32>
+    Admin,            // Address
+    Members,          // Vec<Address>
+    PayoutOrder,      // Vec<Address>
+    Strategy,         // PayoutStrategy
+    ContributionAmt,  // i128
+    Token,            // Address
+    CurrentRound,     // u32
+    PaidMembers,      // Vec<Address>
+    RoundDuration,    // u64
+    RoundDeadline,    // u64
+    Defaulters,       // Vec<Address>
+    PenaltyAmount,    // i128
+    DefaultCount,     // Map<Address, u32>
     SuspendedMembers, // Vec<Address>
+    RoundHistory,     // Vec<PayoutRecord>
 }
 
 #[contract]
@@ -99,8 +121,10 @@ impl AhjoorContract {
         env.storage()
             .instance()
             .set(&DataKey::SuspendedMembers, &Vec::<Address>::new(&env));
+        env.storage()
+            .instance()
+            .set(&DataKey::RoundHistory, &Vec::<PayoutRecord>::new(&env));
 
-        // Event: ContractInitialized
         env.events().publish(
             (symbol_short!("init"),),
             (member_count, contribution_amount),
@@ -152,7 +176,6 @@ impl AhjoorContract {
 
         client.transfer(&contributor, &env.current_contract_address(), &amount);
 
-        // Event: ContributionReceived
         env.events().publish(
             (symbol_short!("contrib"), contributor.clone(), current_round),
             amount,
@@ -204,8 +227,6 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::CurrentRound)
             .unwrap();
-
-        // Use an internal reset function or emit event here if required
         env.events()
             .publish((symbol_short!("closed"), current_round), defaulters);
 
@@ -238,15 +259,12 @@ impl AhjoorContract {
             panic!("Member is not a defaulter for this round");
         }
 
-        // Transfer penalty from defaulter to contract
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
-        
-        // Require auth from the member being penalized
+
         member.require_auth();
         client.transfer(&member, &env.current_contract_address(), &penalty_amount);
 
-        // Update default count
         let mut default_count: Map<Address, u32> = env
             .storage()
             .instance()
@@ -259,7 +277,6 @@ impl AhjoorContract {
             .instance()
             .set(&DataKey::DefaultCount, &default_count);
 
-        // Event: MemberDefaulted
         let current_round: u32 = env
             .storage()
             .instance()
@@ -270,7 +287,6 @@ impl AhjoorContract {
             (penalty_amount, new_default_count),
         );
 
-        // Check if member should be suspended (2+ defaults)
         if new_default_count >= 2 {
             let mut suspended_members: Vec<Address> = env
                 .storage()
@@ -282,8 +298,6 @@ impl AhjoorContract {
                 env.storage()
                     .instance()
                     .set(&DataKey::SuspendedMembers, &suspended_members);
-
-                // Event: MemberSuspended
                 env.events().publish(
                     (symbol_short!("suspended"), member.clone()),
                     new_default_count,
@@ -292,82 +306,54 @@ impl AhjoorContract {
         }
     }
 
-    fn complete_round_payout(
-        env: &Env,
-        _paid_members: &Vec<Address>,
-        _amount: i128,
-        client: token::Client,
-    ) {
+    // --- NEW READ INTERFACE FUNCTIONS ---
+
+    pub fn get_group_info(env: Env) -> GroupInfo {
+        let members: Vec<Address> = env.storage().instance().get(&DataKey::Members).unwrap();
+        let payout_order: Vec<Address> =
+            env.storage().instance().get(&DataKey::PayoutOrder).unwrap();
         let current_round: u32 = env
             .storage()
             .instance()
             .get(&DataKey::CurrentRound)
-            .unwrap();
-        let payout_order: Vec<Address> =
-            env.storage().instance().get(&DataKey::PayoutOrder).unwrap();
-        let suspended_members: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::SuspendedMembers)
-            .unwrap_or(Vec::new(env));
+            .unwrap_or(0);
 
-        // Find next non-suspended recipient
-        let mut recipient_idx = current_round % payout_order.len();
-        let mut attempts = 0;
-        while attempts < payout_order.len() {
-            let potential_recipient = payout_order.get(recipient_idx).unwrap();
-            if !suspended_members.contains(&potential_recipient) {
-                break;
-            }
-            recipient_idx = (recipient_idx + 1) % payout_order.len();
-            attempts += 1;
+        let recipient_idx = (current_round % payout_order.len()) as u32;
+        let next_recipient = payout_order.get(recipient_idx).unwrap();
+
+        GroupInfo {
+            members,
+            contribution_amount: env
+                .storage()
+                .instance()
+                .get(&DataKey::ContributionAmt)
+                .unwrap_or(0),
+            token: env.storage().instance().get(&DataKey::Token).unwrap(),
+            current_round,
+            total_rounds: payout_order.len(),
+            paid_members: env
+                .storage()
+                .instance()
+                .get(&DataKey::PaidMembers)
+                .unwrap_or(Vec::new(&env)),
+            next_recipient,
         }
-
-        if attempts >= payout_order.len() {
-            panic!("All members are suspended");
-        }
-
-        let payout_recipient = payout_order.get(recipient_idx).unwrap();
-        
-        // Total pot is all the tokens in the contract (contributions + penalties)
-        let total_pot = client.balance(&env.current_contract_address());
-
-        client.transfer(
-            &env.current_contract_address(),
-            &payout_recipient,
-            &total_pot,
-        );
-
-        // Event: RoundCompleted
-        env.events().publish(
-            (symbol_short!("rd_done"), current_round),
-            (payout_recipient, total_pot),
-        );
-
-        Self::reset_round_state(env, current_round);
     }
 
-    fn reset_round_state(env: &Env, current_round: u32) {
-        let duration: u64 = env
+    pub fn get_member_status(env: Env, member: Address) -> bool {
+        let paid_members: Vec<Address> = env
             .storage()
             .instance()
-            .get(&DataKey::RoundDuration)
-            .unwrap();
+            .get(&DataKey::PaidMembers)
+            .unwrap_or(Vec::new(&env));
+        paid_members.contains(&member)
+    }
 
+    pub fn get_round_history(env: Env) -> Vec<PayoutRecord> {
         env.storage()
             .instance()
-            .set(&DataKey::CurrentRound, &(current_round + 1));
-        env.storage()
-            .instance()
-            .set(&DataKey::PaidMembers, &Vec::<Address>::new(env));
-        env.storage().instance().set(
-            &DataKey::RoundDeadline,
-            &(env.ledger().timestamp() + duration),
-        );
-
-        // Event: RoundReset
-        env.events()
-            .publish((symbol_short!("reset"),), current_round);
+            .get(&DataKey::RoundHistory)
+            .unwrap_or(Vec::new(&env))
     }
 
     pub fn get_state(env: Env) -> (u32, Vec<Address>, u64, PayoutStrategy) {
@@ -391,9 +377,93 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::Strategy)
             .unwrap_or(PayoutStrategy::RoundRobin);
-
         (current_round, paid_members, deadline, strategy)
     }
-}
 
+    // --- INTERNAL HELPERS ---
+
+    fn complete_round_payout(
+        env: &Env,
+        _paid_members: &Vec<Address>,
+        _amount: i128,
+        client: token::Client,
+    ) {
+        let current_round: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentRound)
+            .unwrap();
+        let payout_order: Vec<Address> =
+            env.storage().instance().get(&DataKey::PayoutOrder).unwrap();
+        let suspended_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SuspendedMembers)
+            .unwrap_or(Vec::new(env));
+
+        let mut recipient_idx = current_round % payout_order.len();
+        let mut attempts = 0;
+        while attempts < payout_order.len() {
+            let potential_recipient = payout_order.get(recipient_idx).unwrap();
+            if !suspended_members.contains(&potential_recipient) {
+                break;
+            }
+            recipient_idx = (recipient_idx + 1) % payout_order.len();
+            attempts += 1;
+        }
+
+        if attempts >= payout_order.len() {
+            panic!("All members are suspended");
+        }
+
+        let payout_recipient = payout_order.get(recipient_idx).unwrap();
+        let total_pot = client.balance(&env.current_contract_address());
+
+        client.transfer(
+            &env.current_contract_address(),
+            &payout_recipient,
+            &total_pot,
+        );
+
+        // Record history before resetting
+        let mut history: Vec<PayoutRecord> = env
+            .storage()
+            .instance()
+            .get(&DataKey::RoundHistory)
+            .unwrap_or(Vec::new(env));
+        history.push_back(PayoutRecord {
+            recipient: payout_recipient.clone(),
+            amount: total_pot,
+        });
+        env.storage()
+            .instance()
+            .set(&DataKey::RoundHistory, &history);
+
+        env.events().publish(
+            (symbol_short!("rd_done"), current_round),
+            (payout_recipient, total_pot),
+        );
+        Self::reset_round_state(env, current_round);
+    }
+
+    fn reset_round_state(env: &Env, current_round: u32) {
+        let duration: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RoundDuration)
+            .unwrap();
+        env.storage()
+            .instance()
+            .set(&DataKey::CurrentRound, &(current_round + 1));
+        env.storage()
+            .instance()
+            .set(&DataKey::PaidMembers, &Vec::<Address>::new(env));
+        env.storage().instance().set(
+            &DataKey::RoundDeadline,
+            &(env.ledger().timestamp() + duration),
+        );
+        env.events()
+            .publish((symbol_short!("reset"),), current_round);
+    }
+}
 mod test;
