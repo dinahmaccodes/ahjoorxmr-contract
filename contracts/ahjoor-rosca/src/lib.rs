@@ -306,6 +306,110 @@ impl AhjoorContract {
         }
     }
 
+    pub fn add_member(env: Env, new_member: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        // Reject mid-round: paid_members must be empty
+        let paid_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaidMembers)
+            .unwrap_or(Vec::new(&env));
+        if !paid_members.is_empty() {
+            panic!("Cannot change members mid-round");
+        }
+
+        let mut members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if members.contains(&new_member) {
+            panic!("Already a member");
+        }
+        members.push_back(new_member.clone());
+        env.storage().instance().set(&DataKey::Members, &members);
+
+        // Recalculate payout order: append new member to the end
+        let mut payout_order: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PayoutOrder)
+            .expect("Payout order not set");
+        payout_order.push_back(new_member.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::PayoutOrder, &payout_order);
+
+        env.events()
+            .publish((symbol_short!("mem_add"), new_member), members.len());
+    }
+
+    pub fn remove_member(env: Env, member: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        // Reject mid-round: paid_members must be empty
+        let paid_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaidMembers)
+            .unwrap_or(Vec::new(&env));
+        if !paid_members.is_empty() {
+            panic!("Cannot change members mid-round");
+        }
+
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if !members.contains(&member) {
+            panic!("Not a member");
+        }
+
+        // Remove from members list
+        let mut new_members: Vec<Address> = Vec::new(&env);
+        for m in members.iter() {
+            if m != member {
+                new_members.push_back(m);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::Members, &new_members);
+
+        // Recalculate payout order: filter out the member (handles gracefully
+        // if they already received their payout turn — they simply won't appear
+        // in future rounds)
+        let old_order: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PayoutOrder)
+            .expect("Payout order not set");
+        let mut new_order: Vec<Address> = Vec::new(&env);
+        for m in old_order.iter() {
+            if m != member {
+                new_order.push_back(m);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::PayoutOrder, &new_order);
+
+        env.events()
+            .publish((symbol_short!("mem_rmv"), member), new_members.len());
+    }
+
     // --- NEW READ INTERFACE FUNCTIONS ---
 
     pub fn get_group_info(env: Env) -> GroupInfo {
