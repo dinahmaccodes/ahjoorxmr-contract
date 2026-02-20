@@ -8,6 +8,39 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal,
 };
 
+pub struct TestSetup<'a> {
+    pub env: Env,
+    pub client: AhjoorContractClient<'a>,
+    pub admin: Address,
+    pub token_admin: Address,
+    pub token_client: TokenClient<'a>,
+    pub token_admin_client: TokenAdminClient<'a>,
+}
+
+fn setup_env<'a>() -> TestSetup<'a> {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_client = TokenClient::new(&env, &token_admin);
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+
+    TestSetup {
+        env,
+        client,
+        admin,
+        token_admin,
+        token_client,
+        token_admin_client,
+    }
+}
+
 #[test]
 fn test_rosca_flow_with_time_locks() {
     let env = Env::default();
@@ -55,7 +88,7 @@ fn test_rosca_flow_with_time_locks() {
 
     client.close_round();
 
-    let (round, paid, deadline, _) = client.get_state();
+    let (round, paid, deadline, _, _) = client.get_state();
     assert_eq!(round, 1);
     assert_eq!(paid.len(), 0);
     assert_eq!(deadline, 7201);
@@ -126,7 +159,7 @@ fn test_on_time_contribution() {
     client.contribute(&user1);
 
     assert_eq!(token_client.balance(&user1), 900);
-    let (_, paid, _, _) = client.get_state();
+    let (_, paid, _, _, _) = client.get_state();
     assert!(paid.contains(&user1));
 }
 
@@ -189,7 +222,7 @@ fn test_admin_close_round() {
     env.ledger().set_timestamp(3601);
     client.close_round();
 
-    let (round, _, _, _) = client.get_state();
+    let (round, _, _, _, _) = client.get_state();
     assert_eq!(round, 1);
 }
 
@@ -1127,5 +1160,84 @@ fn test_remove_member_who_already_received_payout() {
         u2_balance > 2900,
         "u2 should have received the payout, got: {}",
         u2_balance
+    );
+}
+
+// --- NEW WHITELIST ADMIN TESTS (Issue #6) ---
+
+#[test]
+fn test_add_and_remove_approved_token() {
+    let setup = setup_env();
+    let token1 = Address::generate(&setup.env);
+    let token2 = Address::generate(&setup.env);
+
+    // Initial state: any token works because whitelist is empty.
+    
+    // We must manually set Admin so the auth check passes.
+    // Normally init does this, but we want to test whitelist methods independently.
+    setup.env.as_contract(&setup.client.address, || {
+        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
+    });
+    setup.client.add_approved_token(&token1);
+
+    // After this, only token1 should be allowed during init.
+    
+    // Add token2 to whitelist
+    setup.client.add_approved_token(&token2);
+
+    // Remove token1 from whitelist
+    setup.client.remove_approved_token(&token1);
+}
+
+#[test]
+fn test_init_with_approved_token() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone()];
+    
+    // Add the specific token admin to whitelist
+    setup.env.as_contract(&setup.client.address, || {
+        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
+    });
+    setup.client.add_approved_token(&setup.token_admin);
+
+    // Should succeed because token_admin is in the whitelist
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin, // approved token
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Token not approved")]
+fn test_init_with_unapproved_token_panics() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone()];
+    let random_token = Address::generate(&setup.env);
+    
+    // Admins restrict to only allowing `random_token`
+    setup.env.as_contract(&setup.client.address, || {
+        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
+    });
+    setup.client.add_approved_token(&random_token);
+
+    // Try to init with `setup.token_admin` which is NOT approved
+    // Should panic due to "Token not approved"
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin, // unapproved token
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
     );
 }

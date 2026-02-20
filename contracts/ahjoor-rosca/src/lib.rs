@@ -47,6 +47,7 @@ pub enum DataKey {
     DefaultCount,     // Map<Address, u32>
     SuspendedMembers, // Vec<Address>
     RoundHistory,     // Vec<PayoutRecord>
+    ApprovedTokens,   // Vec<Address>
 }
 
 #[contract]
@@ -67,6 +68,16 @@ impl AhjoorContract {
     ) {
         if env.storage().instance().has(&DataKey::Members) {
             panic!("Already initialized");
+        }
+
+        let approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+
+        if !approved_tokens.is_empty() && !approved_tokens.contains(&token) {
+            panic!("Token not approved");
         }
 
         let resolved_order = match strategy {
@@ -410,6 +421,57 @@ impl AhjoorContract {
             .publish((symbol_short!("mem_rmv"), member), new_members.len());
     }
 
+    pub fn add_approved_token(env: Env, token: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let mut approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+            
+        if !approved_tokens.contains(&token) {
+            approved_tokens.push_back(token.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::ApprovedTokens, &approved_tokens);
+            env.events().publish((symbol_short!("tok_add"),), token);
+        }
+    }
+
+    pub fn remove_approved_token(env: Env, token: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+            
+        if approved_tokens.contains(&token) {
+            let mut new_approved_tokens: Vec<Address> = Vec::new(&env);
+            for t in approved_tokens.iter() {
+                if t != token {
+                    new_approved_tokens.push_back(t);
+                }
+            }
+            env.storage()
+                .instance()
+                .set(&DataKey::ApprovedTokens, &new_approved_tokens);
+            env.events().publish((symbol_short!("tok_rmv"),), token);
+        }
+    }
+
     // --- NEW READ INTERFACE FUNCTIONS ---
 
     pub fn get_group_info(env: Env) -> GroupInfo {
@@ -460,7 +522,7 @@ impl AhjoorContract {
             .unwrap_or(Vec::new(&env))
     }
 
-    pub fn get_state(env: Env) -> (u32, Vec<Address>, u64, PayoutStrategy) {
+    pub fn get_state(env: Env) -> (u32, Vec<Address>, u64, PayoutStrategy, Address) {
         let current_round: u32 = env
             .storage()
             .instance()
@@ -481,7 +543,12 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::Strategy)
             .unwrap_or(PayoutStrategy::RoundRobin);
-        (current_round, paid_members, deadline, strategy)
+        let token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .unwrap();
+        (current_round, paid_members, deadline, strategy, token)
     }
 
     // --- INTERNAL HELPERS ---
