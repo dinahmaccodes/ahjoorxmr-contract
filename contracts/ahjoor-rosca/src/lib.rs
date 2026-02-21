@@ -53,23 +53,23 @@ pub struct ExitRequest {
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
-    Admin,            // Address
-    Members,          // Vec<Address>
-    PayoutOrder,      // Vec<Address>
-    Strategy,         // PayoutStrategy
-    ContributionAmt,  // i128
-    Token,            // Address
-    CurrentRound,     // u32
-    PaidMembers,      // Vec<Address>
-    RoundDuration,    // u64
-    RoundDeadline,    // u64
-    Defaulters,       // Vec<Address>
-    PenaltyAmount,    // i128
-    DefaultCount,     // Map<Address, u32>
-    SuspendedMembers, // Vec<Address>
-    RoundHistory,     // Vec<PayoutRecord>
-    ApprovedTokens,   // Vec<Address>
-    RewardPool,         // i128
+    Admin,               // Address
+    Members,             // Vec<Address>
+    PayoutOrder,         // Vec<Address>
+    Strategy,            // PayoutStrategy
+    ContributionAmt,     // i128
+    Token,               // Address
+    CurrentRound,        // u32
+    PaidMembers,         // Vec<Address>
+    RoundDuration,       // u64
+    RoundDeadline,       // u64
+    Defaulters,          // Vec<Address>
+    PenaltyAmount,       // i128
+    DefaultCount,        // Map<Address, u32>
+    SuspendedMembers,    // Vec<Address>
+    RoundHistory,        // Vec<PayoutRecord>
+    ApprovedTokens,      // Vec<Address>
+    RewardPool,          // i128
     TotalParticipations, // u32
     MemberParticipation, // Map<Address, u32>
     ClaimedRewards,      // Map<Address, i128>
@@ -78,6 +78,9 @@ pub enum DataKey {
     ExitRequests,        // Map<Address, ExitRequest>
     ExitedMembers,       // Vec<Address>
     ExitPenaltyBps,      // u32 (basis points, e.g. 1000 = 10%)
+    IsPaused,            // bool
+    PauseReason,         // String
+    PauseTimestamp,      // u64
 }
 
 #[contract]
@@ -167,9 +170,10 @@ impl AhjoorContract {
         env.storage()
             .instance()
             .set(&DataKey::TotalParticipations, &0u32);
-        env.storage()
-            .instance()
-            .set(&DataKey::MemberParticipation, &Map::<Address, u32>::new(&env));
+        env.storage().instance().set(
+            &DataKey::MemberParticipation,
+            &Map::<Address, u32>::new(&env),
+        );
         env.storage()
             .instance()
             .set(&DataKey::ClaimedRewards, &Map::<Address, i128>::new(&env));
@@ -183,12 +187,14 @@ impl AhjoorContract {
         env.storage()
             .instance()
             .set(&DataKey::ExitPenaltyBps, &exit_penalty_bps);
-        env.storage()
-            .instance()
-            .set(&DataKey::ExitRequests, &Map::<Address, ExitRequest>::new(&env));
+        env.storage().instance().set(
+            &DataKey::ExitRequests,
+            &Map::<Address, ExitRequest>::new(&env),
+        );
         env.storage()
             .instance()
             .set(&DataKey::ExitedMembers, &Vec::<Address>::new(&env));
+        env.storage().instance().set(&DataKey::IsPaused, &false);
 
         env.events().publish(
             (symbol_short!("init"),),
@@ -201,6 +207,7 @@ impl AhjoorContract {
     }
 
     pub fn contribute(env: Env, contributor: Address) {
+        Self::check_not_paused(&env);
         contributor.require_auth();
 
         let deadline: u64 = env
@@ -297,6 +304,7 @@ impl AhjoorContract {
     }
 
     pub fn close_round(env: Env) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -344,6 +352,7 @@ impl AhjoorContract {
     }
 
     pub fn penalise_defaulter(env: Env, member: Address) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -417,6 +426,7 @@ impl AhjoorContract {
     }
 
     pub fn add_member(env: Env, new_member: Address) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -461,6 +471,7 @@ impl AhjoorContract {
     }
 
     pub fn remove_member(env: Env, member: Address) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -521,6 +532,7 @@ impl AhjoorContract {
     }
 
     pub fn add_approved_token(env: Env, token: Address) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -544,6 +556,7 @@ impl AhjoorContract {
     }
 
     pub fn remove_approved_token(env: Env, token: Address) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -578,6 +591,7 @@ impl AhjoorContract {
     }
 
     pub fn deposit_rewards(env: Env, depositor: Address, amount: i128) {
+        Self::check_not_paused(&env);
         depositor.require_auth();
 
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
@@ -585,14 +599,18 @@ impl AhjoorContract {
 
         client.transfer(&depositor, &env.current_contract_address(), &amount);
 
-        let mut reward_pool: i128 = env.storage().instance().get(&DataKey::RewardPool).unwrap_or(0);
+        let mut reward_pool: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RewardPool)
+            .unwrap_or(0);
         reward_pool += amount;
-        env.storage().instance().set(&DataKey::RewardPool, &reward_pool);
+        env.storage()
+            .instance()
+            .set(&DataKey::RewardPool, &reward_pool);
 
-        env.events().publish(
-            (symbol_short!("rew_dep"), depositor),
-            amount,
-        );
+        env.events()
+            .publish((symbol_short!("rew_dep"), depositor), amount);
     }
 
     pub fn set_reward_dist_params(
@@ -600,6 +618,7 @@ impl AhjoorContract {
         dist_type: DistributionType,
         weights: Option<Map<Address, u32>>,
     ) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -619,6 +638,7 @@ impl AhjoorContract {
     }
 
     pub fn claim_rewards(env: Env, member: Address) {
+        Self::check_not_paused(&env);
         member.require_auth();
 
         let claimable = Self::get_claimable_reward(env.clone(), member.clone());
@@ -642,19 +662,25 @@ impl AhjoorContract {
 
         client.transfer(&env.current_contract_address(), &member, &claimable);
 
-        env.events().publish(
-            (symbol_short!("rew_clm"), member),
-            claimable,
-        );
+        env.events()
+            .publish((symbol_short!("rew_clm"), member), claimable);
     }
 
     pub fn get_claimable_reward(env: Env, member: Address) -> i128 {
-        let members: Vec<Address> = env.storage().instance().get(&DataKey::Members).expect("Not initialized");
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
         if !members.contains(&member) {
             return 0;
         }
 
-        let reward_pool: i128 = env.storage().instance().get(&DataKey::RewardPool).unwrap_or(0);
+        let reward_pool: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RewardPool)
+            .unwrap_or(0);
         if reward_pool == 0 {
             return 0;
         }
@@ -666,9 +692,7 @@ impl AhjoorContract {
             .unwrap_or(DistributionType::Equal);
 
         let share = match dist_type {
-            DistributionType::Equal => {
-                reward_pool / (members.len() as i128)
-            }
+            DistributionType::Equal => reward_pool / (members.len() as i128),
             DistributionType::Proportional => {
                 let total_participations: u32 = env
                     .storage()
@@ -796,7 +820,93 @@ impl AhjoorContract {
 
     // --- EMERGENCY EXIT ---
 
+    pub fn pause_group(env: Env, reason: soroban_sdk::String) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        if Self::is_paused(env.clone()) {
+            panic!("Group is already paused");
+        }
+
+        env.storage().instance().set(&DataKey::IsPaused, &true);
+        env.storage().instance().set(&DataKey::PauseReason, &reason);
+        env.storage()
+            .instance()
+            .set(&DataKey::PauseTimestamp, &env.ledger().timestamp());
+
+        env.events().publish((symbol_short!("paused"),), reason);
+    }
+
+    pub fn resume_group(env: Env, reason: soroban_sdk::String) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        if !Self::is_paused(env.clone()) {
+            panic!("Group is not paused");
+        }
+
+        let pause_timestamp: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PauseTimestamp)
+            .unwrap();
+        let current_timestamp = env.ledger().timestamp();
+        let pause_duration = current_timestamp - pause_timestamp;
+
+        // Extend the round deadline
+        let current_deadline: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RoundDeadline)
+            .unwrap_or(0);
+        if current_deadline > 0 {
+            env.storage().instance().set(
+                &DataKey::RoundDeadline,
+                &(current_deadline + pause_duration),
+            );
+        }
+
+        env.storage().instance().set(&DataKey::IsPaused, &false);
+
+        // We clean up Reason and Timestamp to save storage space
+        env.storage().instance().remove(&DataKey::PauseReason);
+        env.storage().instance().remove(&DataKey::PauseTimestamp);
+
+        env.events().publish((symbol_short!("resumed"),), reason);
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false)
+    }
+
+    pub fn get_pause_info(env: Env) -> (bool, soroban_sdk::String, u64) {
+        let is_paused = Self::is_paused(env.clone());
+        let reason: soroban_sdk::String = env
+            .storage()
+            .instance()
+            .get(&DataKey::PauseReason)
+            .unwrap_or(soroban_sdk::String::from_str(&env, ""));
+        let timestamp: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PauseTimestamp)
+            .unwrap_or(0);
+        (is_paused, reason, timestamp)
+    }
+
     pub fn request_emergency_exit(env: Env, member: Address) {
+        Self::check_not_paused(&env);
         member.require_auth();
 
         // Check exited FIRST so the error is correct even after member is
@@ -883,6 +993,7 @@ impl AhjoorContract {
     }
 
     pub fn approve_exit(env: Env, member: Address) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -955,6 +1066,7 @@ impl AhjoorContract {
     }
 
     pub fn reject_exit(env: Env, member: Address) {
+        Self::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -976,10 +1088,8 @@ impl AhjoorContract {
             .instance()
             .set(&DataKey::ExitRequests, &requests);
 
-        env.events().publish(
-            (symbol_short!("exit_no"), member.clone()),
-            (),
-        );
+        env.events()
+            .publish((symbol_short!("exit_no"), member.clone()), ());
 
         env.storage()
             .instance()
@@ -1001,6 +1111,17 @@ impl AhjoorContract {
     }
 
     // --- INTERNAL HELPERS ---
+
+    fn check_not_paused(env: &Env) {
+        let is_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false);
+        if is_paused {
+            panic!("Action blocked: Group is paused");
+        }
+    }
 
     fn complete_round_payout(
         env: &Env,
@@ -1044,7 +1165,11 @@ impl AhjoorContract {
         }
 
         let payout_recipient = payout_order.get(recipient_idx).unwrap();
-        let reward_pool: i128 = env.storage().instance().get(&DataKey::RewardPool).unwrap_or(0);
+        let reward_pool: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RewardPool)
+            .unwrap_or(0);
         let total_balance = client.balance(&env.current_contract_address());
         let total_pot = total_balance - reward_pool;
 

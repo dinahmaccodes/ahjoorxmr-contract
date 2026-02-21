@@ -741,7 +741,7 @@ fn test_cannot_penalise_before_deadline() {
         &PayoutStrategy::RoundRobin,
         &None,
         &50, // penalty_amount
-        &0, // exit_penalty_bps (no penalty)
+        &0,  // exit_penalty_bps (no penalty)
     );
 
     // Try to penalise before any round is closed (no defaulters identified yet)
@@ -810,7 +810,7 @@ fn test_cannot_penalise_non_defaulter() {
         &PayoutStrategy::RoundRobin,
         &None,
         &50, // penalty_amount
-        &0, // exit_penalty_bps (no penalty)
+        &0,  // exit_penalty_bps (no penalty)
     );
 
     // Both users contribute (no defaulters)
@@ -1640,7 +1640,7 @@ fn test_reward_distribution_scenarios() {
     let u1 = Address::generate(&setup.env);
     let u2 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone(), u2.clone()];
-    
+
     setup.token_admin_client.mint(&u1, &1000);
     setup.token_admin_client.mint(&u2, &1000);
     setup.token_admin_client.mint(&setup.admin, &1000);
@@ -1659,16 +1659,18 @@ fn test_reward_distribution_scenarios() {
 
     // 1. Deposit Rewards
     setup.client.deposit_rewards(&setup.admin, &200);
-    
+
     // 2. Equal Distribution (Default)
     assert_eq!(setup.client.get_claimable_reward(&u1), 100);
     assert_eq!(setup.client.get_claimable_reward(&u2), 100);
 
     // 3. Proportional Distribution
-    setup.client.set_reward_dist_params(&DistributionType::Proportional, &None);
+    setup
+        .client
+        .set_reward_dist_params(&DistributionType::Proportional, &None);
     // No participations yet
     assert_eq!(setup.client.get_claimable_reward(&u1), 0);
-    
+
     setup.client.contribute(&u1);
     // u1 has 1 participation, total 1 -> 200 * 1/1 = 200
     assert_eq!(setup.client.get_claimable_reward(&u1), 200);
@@ -1683,7 +1685,9 @@ fn test_reward_distribution_scenarios() {
     let mut weights: Map<Address, u32> = Map::new(&setup.env);
     weights.set(u1.clone(), 3);
     weights.set(u2.clone(), 1);
-    setup.client.set_reward_dist_params(&DistributionType::Weighted, &Some(weights));
+    setup
+        .client
+        .set_reward_dist_params(&DistributionType::Weighted, &Some(weights));
     // u1: 200 * 3/4 = 150, u2: 200 * 1/4 = 50
     assert_eq!(setup.client.get_claimable_reward(&u1), 150);
     assert_eq!(setup.client.get_claimable_reward(&u2), 50);
@@ -1696,7 +1700,7 @@ fn test_reward_distribution_scenarios() {
 
     // 6. Deposit More Rewards
     setup.client.deposit_rewards(&setup.admin, &100);
-    // Total pool is now 300. 
+    // Total pool is now 300.
     // u1 share: 300 * 3/4 = 225. Claimed: 150. Claimable: 75
     // u2 share: 300 * 1/4 = 75. Claimed: 0. Claimable: 75
     assert_eq!(setup.client.get_claimable_reward(&u1), 75);
@@ -1709,7 +1713,7 @@ fn test_contribution_pot_separation() {
     let u1 = Address::generate(&setup.env);
     let u2 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone(), u2.clone()];
-    
+
     setup.token_admin_client.mint(&u1, &1000);
     setup.token_admin_client.mint(&u2, &1000);
     setup.token_admin_client.mint(&setup.admin, &1000);
@@ -1737,7 +1741,7 @@ fn test_contribution_pot_separation() {
     // u1 was recipient. Pot should be exactly 200 (100 * 2), NOT including rewards.
     // u1 balance: 1000 (start) - 100 (contrib) + 200 (pot) = 1100
     assert_eq!(setup.token_client.balance(&u1), 1100);
-    
+
     // Rewards pool should still be intact (500)
     assert_eq!(setup.client.get_claimable_reward(&u1), 250); // Equal share
     assert_eq!(setup.client.get_claimable_reward(&u2), 250);
@@ -1749,7 +1753,9 @@ fn test_contribution_pot_separation() {
 
 /// Helper: initialise a 3-member ROSCA with an exit penalty of 10% (1000 bps).
 /// Returns (client, admin, u1, u2, u3, token_client, token_admin)
-fn setup_exit_env(env: &Env) -> (
+fn setup_exit_env(
+    env: &Env,
+) -> (
     AhjoorContractClient,
     Address,
     Address,
@@ -1787,8 +1793,8 @@ fn setup_exit_env(env: &Env) -> (
         &3600,
         &PayoutStrategy::RoundRobin,
         &None,
-        &0,            // penalty_amount (defaulter penalty, distinct from exit penalty)
-        &1000,         // exit_penalty_bps = 10%
+        &0,    // penalty_amount (defaulter penalty, distinct from exit penalty)
+        &1000, // exit_penalty_bps = 10%
     );
 
     (client, admin, u1, u2, u3, token_client, token_admin_addr)
@@ -1806,7 +1812,10 @@ fn test_member_can_request_emergency_exit() {
     client.request_emergency_exit(&u1);
 
     let requests = client.get_exit_requests();
-    assert!(requests.contains_key(u1.clone()), "Exit request should be stored");
+    assert!(
+        requests.contains_key(u1.clone()),
+        "Exit request should be stored"
+    );
 
     let req = requests.get(u1.clone()).unwrap();
     assert_eq!(req.member, u1);
@@ -1887,7 +1896,7 @@ fn test_admin_approves_exit_penalty_applied() {
 
     let req = client.get_exit_requests().get(u1.clone()).unwrap();
     assert_eq!(req.rounds_contributed, 1);
-    assert_eq!(req.penalty_amount, 10);   // 10% of 100
+    assert_eq!(req.penalty_amount, 10); // 10% of 100
     assert_eq!(req.refund_amount, 90);
 
     client.approve_exit(&u1);
@@ -1913,14 +1922,15 @@ fn test_admin_approves_exit_penalty_applied() {
     let u2_before = token_client.balance(&u2);
     client.contribute(&u2);
     client.contribute(&u3); // Both must contribute to complete round with 2 members
-    
+
     // Pot = 10 (penalty from u1's exit) + 200 (u2+u3 contributions) = 210 → goes to u2
     let u2_after = token_client.balance(&u2);
-    assert!(u2_after > u2_before, "u2 should have received the round payout");
+    assert!(
+        u2_after > u2_before,
+        "u2 should have received the round payout"
+    );
     assert_eq!(u2_after, u2_before - 100 + 210);
 }
-
-
 
 // ---------------------------------------------------------------
 // 6. Admin rejects exit: member stays, request cleared
@@ -1982,11 +1992,12 @@ fn test_exited_member_skipped_in_payout_order() {
     client.contribute(&u3);
     // Pot = 200 (100 * 2 members).
     let u2_after = token_client.balance(&u2);
-    assert_eq!(u2_after, u2_before - 100 + 200,
-        "u2 should receive the round 0 pot after u1 exits");
+    assert_eq!(
+        u2_after,
+        u2_before - 100 + 200,
+        "u2 should receive the round 0 pot after u1 exits"
+    );
 }
-
-
 
 // ---------------------------------------------------------------
 // 9. Exited members are NOT counted as defaulters after close_round
@@ -2010,7 +2021,10 @@ fn test_exited_member_skipped_in_defaulters_list() {
     // u3 should be a defaulter, u1 should NOT (they've exited)
     // We verify by checking that penalising u1 panics
     let result = client.try_penalise_defaulter(&u1);
-    assert!(result.is_err(), "Exited member must not appear in defaulters");
+    assert!(
+        result.is_err(),
+        "Exited member must not appear in defaulters"
+    );
 }
 
 // ---------------------------------------------------------------
@@ -2048,8 +2062,8 @@ fn test_exit_with_zero_penalty() {
         &3600,
         &PayoutStrategy::RoundRobin,
         &None,
-        &0,    // defaulter penalty disabled
-        &0,    // exit_penalty_bps = 0%  (no penalty)
+        &0, // defaulter penalty disabled
+        &0, // exit_penalty_bps = 0%  (no penalty)
     );
 
     // u1 contributes in round 0 but u2 does NOT → round never auto-completes.
@@ -2071,7 +2085,6 @@ fn test_exit_with_zero_penalty() {
     client.approve_exit(&u1);
     assert_eq!(token_client.balance(&u1), u1_balance_before + 100);
 }
-
 
 // ---------------------------------------------------------------
 // 11. Exit request emits the correct event
@@ -2117,4 +2130,157 @@ fn test_exit_approval_event_emitted() {
             u1.into_val(&env)
         ]
     );
+}
+
+// --- PAUSE AND RESUME TESTS ---
+
+#[test]
+fn test_pause_and_resume_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let members = vec![&env, Address::generate(&env)];
+
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
+    );
+
+    // Default state: not paused
+    assert_eq!(client.is_paused(), false);
+
+    // Admin pauses the group
+    env.ledger().set_timestamp(1000);
+    let reason = soroban_sdk::String::from_str(&env, "Emergency maintenance");
+    client.pause_group(&reason);
+
+    assert_eq!(client.is_paused(), true);
+    let (is_paused, retrieved_reason, pause_time) = client.get_pause_info();
+    assert_eq!(is_paused, true);
+    assert_eq!(retrieved_reason, reason);
+    assert_eq!(pause_time, 1000);
+
+    // Initial deadline was start_time(0) + 3600 = 3600.
+    let (_, _, initial_deadline, _, _) = client.get_state();
+    assert_eq!(initial_deadline, 3600);
+
+    // Admin resumes the group after 500 units of time
+    env.ledger().set_timestamp(1500);
+    client.resume_group(&soroban_sdk::String::from_str(&env, "Fixed"));
+
+    assert_eq!(client.is_paused(), false);
+    let (is_paused_after, retrieved_reason_after, pause_time_after) = client.get_pause_info();
+    assert_eq!(is_paused_after, false);
+    assert_eq!(retrieved_reason_after.len(), 0); // Removed from storage
+    assert_eq!(pause_time_after, 0);
+
+    // Check if the deadline was extended by pause duration (500)
+    let (_, _, new_deadline, _, _) = client.get_state();
+    assert_eq!(new_deadline, 4100);
+}
+
+#[test]
+#[should_panic(expected = "Action blocked: Group is paused")]
+fn test_paused_blocks_contribute() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let user1 = Address::generate(&env);
+    let members = vec![&env, user1.clone()];
+
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
+    );
+
+    client.pause_group(&soroban_sdk::String::from_str(&env, "Pause"));
+    client.contribute(&user1);
+}
+
+#[test]
+#[should_panic(expected = "Group is already paused")]
+fn test_cannot_pause_already_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let members = vec![&env, Address::generate(&env)];
+
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
+    );
+
+    let r = soroban_sdk::String::from_str(&env, "P");
+    client.pause_group(&r);
+    client.pause_group(&r);
+}
+
+#[test]
+#[should_panic(expected = "Group is not paused")]
+fn test_cannot_resume_not_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let members = vec![&env, Address::generate(&env)];
+
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
+    );
+
+    client.resume_group(&soroban_sdk::String::from_str(&env, "R"));
 }
