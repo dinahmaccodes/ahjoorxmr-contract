@@ -40,6 +40,16 @@ pub struct PayoutRecord {
     pub amount: i128,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExitRequest {
+    pub member: Address,
+    pub rounds_contributed: u32,
+    pub penalty_amount: i128,
+    pub refund_amount: i128,
+    pub approved: bool,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
@@ -65,6 +75,9 @@ pub enum DataKey {
     ClaimedRewards,      // Map<Address, i128>
     RewardWeights,       // Map<Address, u32>
     RewardDistType,      // DistributionType
+    ExitRequests,        // Map<Address, ExitRequest>
+    ExitedMembers,       // Vec<Address>
+    ExitPenaltyBps,      // u32 (basis points, e.g. 1000 = 10%)
 }
 
 #[contract]
@@ -82,6 +95,7 @@ impl AhjoorContract {
         strategy: PayoutStrategy,
         custom_order: Option<Vec<Address>>,
         penalty_amount: i128,
+        exit_penalty_bps: u32,
     ) {
         if env.storage().instance().has(&DataKey::Members) {
             panic!("Already initialized");
@@ -166,6 +180,16 @@ impl AhjoorContract {
             .instance()
             .set(&DataKey::RewardDistType, &DistributionType::Equal);
 
+        env.storage()
+            .instance()
+            .set(&DataKey::ExitPenaltyBps, &exit_penalty_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::ExitRequests, &Map::<Address, ExitRequest>::new(&env));
+        env.storage()
+            .instance()
+            .set(&DataKey::ExitedMembers, &Vec::<Address>::new(&env));
+
         env.events().publish(
             (symbol_short!("init"),),
             (member_count, contribution_amount),
@@ -186,6 +210,15 @@ impl AhjoorContract {
             .expect("Deadline not set");
         if env.ledger().timestamp() > deadline {
             panic!("Contribution failed: Round deadline has passed");
+        }
+
+        let exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env));
+        if exited_members.contains(&contributor) {
+            panic!("Member has exited");
         }
 
         let members: Vec<Address> = env
@@ -283,10 +316,15 @@ impl AhjoorContract {
         let members: Vec<Address> = env.storage().instance().get(&DataKey::Members).unwrap();
         let paid_members: Vec<Address> =
             env.storage().instance().get(&DataKey::PaidMembers).unwrap();
+        let exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env));
 
         let mut defaulters = Vec::new(&env);
         for member in members.iter() {
-            if !paid_members.contains(&member) {
+            if !paid_members.contains(&member) && !exited_members.contains(&member) {
                 defaulters.push_back(member);
             }
         }
@@ -756,6 +794,212 @@ impl AhjoorContract {
         (current_round, paid_members, deadline, strategy, token)
     }
 
+    // --- EMERGENCY EXIT ---
+
+    pub fn request_emergency_exit(env: Env, member: Address) {
+        member.require_auth();
+
+        // Check exited FIRST so the error is correct even after member is
+        // removed from Members list on approval.
+        let exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env));
+        if exited_members.contains(&member) {
+            panic!("Member already exited");
+        }
+
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if !members.contains(&member) {
+            panic!("Not a member");
+        }
+
+        // Prevent exit mid-round
+        let paid_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaidMembers)
+            .unwrap_or(Vec::new(&env));
+        if !paid_members.is_empty() {
+            panic!("Cannot request exit mid-round");
+        }
+
+        // Check no existing pending request
+        let mut requests: Map<Address, ExitRequest> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitRequests)
+            .unwrap_or(Map::new(&env));
+        if requests.contains_key(member.clone()) {
+            panic!("Exit request already pending");
+        }
+
+        // Calculate penalty and refund based on rounds completed so far
+        let current_round: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentRound)
+            .unwrap_or(0);
+        let contribution_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ContributionAmt)
+            .unwrap_or(0);
+        let exit_penalty_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitPenaltyBps)
+            .unwrap_or(0);
+
+        let total_contributed = contribution_amount * (current_round as i128);
+        let penalty_amount = total_contributed * (exit_penalty_bps as i128) / 10_000;
+        let refund_amount = total_contributed - penalty_amount;
+
+        let request = ExitRequest {
+            member: member.clone(),
+            rounds_contributed: current_round,
+            penalty_amount,
+            refund_amount,
+            approved: false,
+        };
+        requests.set(member.clone(), request);
+        env.storage()
+            .instance()
+            .set(&DataKey::ExitRequests, &requests);
+
+        env.events().publish(
+            (symbol_short!("exit_req"), member.clone()),
+            (current_round, refund_amount),
+        );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    pub fn approve_exit(env: Env, member: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let mut requests: Map<Address, ExitRequest> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitRequests)
+            .unwrap_or(Map::new(&env));
+        if !requests.contains_key(member.clone()) {
+            panic!("No exit request found for member");
+        }
+        let request = requests.get(member.clone()).unwrap();
+
+        // Transfer refund to member (penalty stays in contract pot)
+        if request.refund_amount > 0 {
+            let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+            let client = token::Client::new(&env, &token_addr);
+            client.transfer(
+                &env.current_contract_address(),
+                &member,
+                &request.refund_amount,
+            );
+        }
+
+        // Remove from Members list
+        let old_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .unwrap_or(Vec::new(&env));
+        let mut new_members: Vec<Address> = Vec::new(&env);
+        for m in old_members.iter() {
+            if m != member {
+                new_members.push_back(m);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::Members, &new_members);
+
+        // Add to ExitedMembers
+        let mut exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env));
+        exited_members.push_back(member.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::ExitedMembers, &exited_members);
+
+        // Clear the request
+        requests.remove(member.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::ExitRequests, &requests);
+
+        env.events().publish(
+            (symbol_short!("exit_ok"), member.clone()),
+            request.refund_amount,
+        );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    pub fn reject_exit(env: Env, member: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let mut requests: Map<Address, ExitRequest> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitRequests)
+            .unwrap_or(Map::new(&env));
+        if !requests.contains_key(member.clone()) {
+            panic!("No exit request found for member");
+        }
+
+        requests.remove(member.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::ExitRequests, &requests);
+
+        env.events().publish(
+            (symbol_short!("exit_no"), member.clone()),
+            (),
+        );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    pub fn get_exit_requests(env: Env) -> Map<Address, ExitRequest> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ExitRequests)
+            .unwrap_or(Map::new(&env))
+    }
+
+    pub fn get_exited_members(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env))
+    }
+
     // --- INTERNAL HELPERS ---
 
     fn complete_round_payout(
@@ -776,12 +1020,19 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::SuspendedMembers)
             .unwrap_or(Vec::new(env));
+        let exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(env));
 
         let mut recipient_idx = current_round % payout_order.len();
         let mut attempts = 0;
         while attempts < payout_order.len() {
             let potential_recipient = payout_order.get(recipient_idx).unwrap();
-            if !suspended_members.contains(&potential_recipient) {
+            if !suspended_members.contains(&potential_recipient)
+                && !exited_members.contains(&potential_recipient)
+            {
                 break;
             }
             recipient_idx = (recipient_idx + 1) % payout_order.len();

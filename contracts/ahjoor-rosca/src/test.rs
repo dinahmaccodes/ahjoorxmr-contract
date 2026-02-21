@@ -76,6 +76,7 @@ fn test_rosca_flow_with_time_locks() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(100);
@@ -118,6 +119,7 @@ fn test_cannot_close_early() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(500);
@@ -153,6 +155,7 @@ fn test_on_time_contribution() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(1000);
@@ -188,6 +191,7 @@ fn test_late_contribution_rejection() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(3601);
@@ -217,6 +221,7 @@ fn test_admin_close_round() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(3601);
@@ -260,6 +265,7 @@ fn test_admin_assigned_strategy_execution() {
         &PayoutStrategy::AdminAssigned,
         &Some(custom_order),
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     client.contribute(&user1);
@@ -291,6 +297,7 @@ fn test_invalid_admin_order_validation() {
         &PayoutStrategy::AdminAssigned,
         &Some(bad_order),
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -328,6 +335,7 @@ fn test_round_robin_e2e_all_rounds() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // ROUND 0: u1 should get the payout
@@ -376,6 +384,7 @@ fn test_admin_assigned_e2e_all_rounds() {
         &PayoutStrategy::AdminAssigned,
         &Some(custom_order),
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // ROUND 0: u2 should get the payout first
@@ -421,6 +430,7 @@ fn test_verify_contract_events() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     let last_event = env.events().all().last().unwrap();
@@ -502,6 +512,7 @@ fn test_single_defaulter_penalty() {
         &PayoutStrategy::RoundRobin,
         &None,
         &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Only user1 contributes
@@ -557,6 +568,7 @@ fn test_multiple_defaulters_penalty() {
         &PayoutStrategy::RoundRobin,
         &None,
         &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Only user1 contributes
@@ -608,6 +620,7 @@ fn test_member_suspension_after_two_defaults() {
         &PayoutStrategy::RoundRobin,
         &None,
         &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // ROUND 0: user2 defaults
@@ -666,6 +679,7 @@ fn test_suspended_member_skipped_in_payout() {
         &PayoutStrategy::RoundRobin,
         &None,
         &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Suspend user2 by making them default twice
@@ -727,6 +741,7 @@ fn test_cannot_penalise_before_deadline() {
         &PayoutStrategy::RoundRobin,
         &None,
         &50, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Try to penalise before any round is closed (no defaulters identified yet)
@@ -756,6 +771,7 @@ fn test_penalty_disabled_when_amount_zero() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0, // penalty_amount disabled
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(3601);
@@ -794,6 +810,7 @@ fn test_cannot_penalise_non_defaulter() {
         &PayoutStrategy::RoundRobin,
         &None,
         &50, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Both users contribute (no defaulters)
@@ -835,6 +852,7 @@ fn test_read_interface_lifecycle() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     let info = client.get_group_info();
@@ -901,6 +919,7 @@ fn test_member_status_resets_after_round() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // 1. u1 contributes. Round is NOT over because u2 hasn't paid.
@@ -951,6 +970,7 @@ fn test_add_member_before_round() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Add the new member before any round starts (paid_members is empty)
@@ -998,6 +1018,7 @@ fn test_add_member_mid_round_panics() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // u1 contributes — now paid_members is non-empty (mid-round)
@@ -1038,6 +1059,7 @@ fn test_remove_member_between_rounds() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Complete round 0 so paid_members is reset
@@ -1087,6 +1109,7 @@ fn test_remove_member_mid_round_panics() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // u1 contributes — mid-round state
@@ -1129,6 +1152,7 @@ fn test_remove_member_who_already_received_payout() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Round 0: u1 receives payout
@@ -1219,6 +1243,7 @@ fn test_init_with_approved_token() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -1252,6 +1277,7 @@ fn test_init_with_unapproved_token_panics() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -1277,6 +1303,7 @@ fn test_init_twice_panics() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Second init should panic
@@ -1289,6 +1316,7 @@ fn test_init_twice_panics() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -1310,6 +1338,7 @@ fn test_contribute_non_member_panics() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Non-member trying to contribute
@@ -1335,6 +1364,7 @@ fn test_contribute_twice_panics() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // First contribution
@@ -1366,6 +1396,7 @@ fn test_payout_correct_member_n_group() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Round 0: u1 gets the pot (4 * 100 = 400)
@@ -1428,6 +1459,7 @@ fn test_contract_balance_zero_after_round() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Before contributions, balance is 0
@@ -1460,6 +1492,7 @@ fn test_single_member_rosca() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Single member contributes, should immediately complete round and payout to self
@@ -1496,6 +1529,7 @@ fn test_large_group_rosca() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Do 1 full cycle (10 rounds)
@@ -1537,6 +1571,7 @@ fn test_get_state_lifecycle_details() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Before any contributions
@@ -1581,6 +1616,7 @@ fn test_bump_storage() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Call bump_storage
@@ -1618,6 +1654,7 @@ fn test_reward_distribution_scenarios() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // 1. Deposit Rewards
@@ -1686,6 +1723,7 @@ fn test_contribution_pot_separation() {
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Deposit rewards
@@ -1703,4 +1741,380 @@ fn test_contribution_pot_separation() {
     // Rewards pool should still be intact (500)
     assert_eq!(setup.client.get_claimable_reward(&u1), 250); // Equal share
     assert_eq!(setup.client.get_claimable_reward(&u2), 250);
+}
+
+// ============================================================
+//  EMERGENCY EXIT MECHANISM TESTS — Issue #24
+// ============================================================
+
+/// Helper: initialise a 3-member ROSCA with an exit penalty of 10% (1000 bps).
+/// Returns (client, admin, u1, u2, u3, token_client, token_admin)
+fn setup_exit_env(env: &Env) -> (
+    AhjoorContractClient,
+    Address,
+    Address,
+    Address,
+    Address,
+    soroban_sdk::token::Client,
+    Address,
+) {
+    env.mock_all_auths();
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(env, &contract_id);
+
+    let admin = Address::generate(env);
+    let token_admin_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(env, &token_admin_addr);
+    let token_client = soroban_sdk::token::Client::new(env, &token_admin_addr);
+
+    let u1 = Address::generate(env);
+    let u2 = Address::generate(env);
+    let u3 = Address::generate(env);
+
+    for u in [&u1, &u2, &u3] {
+        token_admin_client.mint(u, &3000);
+    }
+
+    let members = vec![env, u1.clone(), u2.clone(), u3.clone()];
+
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin_addr,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,            // penalty_amount (defaulter penalty, distinct from exit penalty)
+        &1000,         // exit_penalty_bps = 10%
+    );
+
+    (client, admin, u1, u2, u3, token_client, token_admin_addr)
+}
+
+// ---------------------------------------------------------------
+// 1. Happy-path: a member can request an emergency exit
+// ---------------------------------------------------------------
+#[test]
+fn test_member_can_request_emergency_exit() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    // Between rounds (paid_members is empty) — request should succeed
+    client.request_emergency_exit(&u1);
+
+    let requests = client.get_exit_requests();
+    assert!(requests.contains_key(u1.clone()), "Exit request should be stored");
+
+    let req = requests.get(u1.clone()).unwrap();
+    assert_eq!(req.member, u1);
+    // u1 has contributed 0 full rounds so far → refund = 0 - penalty = 0
+    assert_eq!(req.rounds_contributed, 0);
+    assert_eq!(req.penalty_amount, 0);
+    assert_eq!(req.refund_amount, 0);
+    assert!(!req.approved);
+}
+
+// ---------------------------------------------------------------
+// 2. Non-member cannot request an exit
+// ---------------------------------------------------------------
+#[test]
+#[should_panic(expected = "Not a member")]
+fn test_exit_request_rejected_if_not_member() {
+    let env = Env::default();
+    let (client, _admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    let non_member = Address::generate(&env);
+    client.request_emergency_exit(&non_member);
+}
+
+// ---------------------------------------------------------------
+// 3. Already-exited member cannot request again
+// ---------------------------------------------------------------
+#[test]
+#[should_panic(expected = "Member already exited")]
+fn test_exit_request_rejected_if_already_exited() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    client.request_emergency_exit(&u1);
+    client.approve_exit(&u1);
+
+    // Now u1 is in ExitedMembers, requesting again should panic
+    client.request_emergency_exit(&u1);
+}
+
+// ---------------------------------------------------------------
+// 4. Cannot request exit mid-round (after at least one contribution)
+// ---------------------------------------------------------------
+#[test]
+#[should_panic(expected = "Cannot request exit mid-round")]
+fn test_exit_request_rejected_mid_round() {
+    let env = Env::default();
+    let (client, _admin, u1, u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    // u2 contributes → round is in progress
+    client.contribute(&u2);
+
+    // u1 tries to exit mid-round → should panic
+    client.request_emergency_exit(&u1);
+}
+
+// ---------------------------------------------------------------
+// 5. Admin approves exit: penalty kept, refund sent, member removed
+//    Set up: advance round via close_round so contributions are still
+//    held in the contract and can be refunded on exit.
+// ---------------------------------------------------------------
+#[test]
+fn test_admin_approves_exit_penalty_applied() {
+    let env = Env::default();
+    let (client, _admin, u1, u2, u3, token_client, _ta) = setup_exit_env(&env);
+
+    // u1 contributes in round 0. u2 does NOT (so the round never auto-completes).
+    // Therefore the 100 tokens u1 sent remain in the contract.
+    client.contribute(&u1);
+
+    // Advance past deadline so admin can close the round.
+    env.ledger().set_timestamp(3601);
+    client.close_round();
+    // Now CurrentRound = 1. Contract still holds u1's 100 tokens.
+
+    // u1 has contributed in 1 round. penalty = 100 * 1000 / 10000 = 10. refund = 90.
+    let u1_balance_before_exit = token_client.balance(&u1);
+    client.request_emergency_exit(&u1);
+
+    let req = client.get_exit_requests().get(u1.clone()).unwrap();
+    assert_eq!(req.rounds_contributed, 1);
+    assert_eq!(req.penalty_amount, 10);   // 10% of 100
+    assert_eq!(req.refund_amount, 90);
+
+    client.approve_exit(&u1);
+
+    // u1 received the refund (90 returned, 10 stays as penalty in contract)
+    let u1_balance_after_exit = token_client.balance(&u1);
+    assert_eq!(u1_balance_after_exit, u1_balance_before_exit + 90);
+
+    // u1 no longer a member
+    let info = client.get_group_info();
+    assert!(!info.members.contains(&u1));
+    assert_eq!(info.total_rounds, 3); // PayoutOrder remains at 3 to keep schedule sync
+
+    // u1 appears in exited members
+    let exited = client.get_exited_members();
+    assert!(exited.contains(&u1));
+
+    // Exit request is cleared
+    assert!(!client.get_exit_requests().contains_key(u1.clone()));
+
+    // u2 can still continue normally in round 1
+    // At Round 1, recipient is originally u2 (1 % 3 = 1).
+    let u2_before = token_client.balance(&u2);
+    client.contribute(&u2);
+    client.contribute(&u3); // Both must contribute to complete round with 2 members
+    
+    // Pot = 10 (penalty from u1's exit) + 200 (u2+u3 contributions) = 210 → goes to u2
+    let u2_after = token_client.balance(&u2);
+    assert!(u2_after > u2_before, "u2 should have received the round payout");
+    assert_eq!(u2_after, u2_before - 100 + 210);
+}
+
+
+
+// ---------------------------------------------------------------
+// 6. Admin rejects exit: member stays, request cleared
+// ---------------------------------------------------------------
+#[test]
+fn test_admin_rejects_exit_request() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    client.request_emergency_exit(&u1);
+    client.reject_exit(&u1);
+
+    // Request is removed
+    assert!(!client.get_exit_requests().contains_key(u1.clone()));
+
+    // u1 is still a member
+    let info = client.get_group_info();
+    assert!(info.members.contains(&u1));
+
+    // u1 is NOT in exited members
+    assert!(!client.get_exited_members().contains(&u1));
+}
+
+// ---------------------------------------------------------------
+// 7. Exited member cannot contribute
+// ---------------------------------------------------------------
+#[test]
+#[should_panic(expected = "Member has exited")]
+fn test_exited_member_cannot_contribute() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    client.request_emergency_exit(&u1);
+    client.approve_exit(&u1);
+
+    // u1 tries to contribute after exit — must panic
+    client.contribute(&u1);
+}
+
+// ---------------------------------------------------------------
+// 8. Exited member is skipped in payout order; remaining members
+//    still receive correct payouts.
+//    u1 exits between rounds (0 contributions, so refund=0).
+// ---------------------------------------------------------------
+#[test]
+fn test_exited_member_skipped_in_payout_order() {
+    let env = Env::default();
+    let (client, _admin, u1, u2, u3, token_client, _ta) = setup_exit_env(&env);
+
+    // Round 0: u1 (index 0) is the payout recipient. All contribute.
+    // u1 exits right away (before any round contributions — refund = 0, no transfer needed)
+    client.request_emergency_exit(&u1);
+    client.approve_exit(&u1);
+
+    // Now only u2 and u3 are members. Payout order is still 3.
+    // Round 0 recipient was u1 (0 % 3 = 0). Since u1 is exited, it skips to u2 (1 % 3 = 1).
+    let u2_before = token_client.balance(&u2);
+    client.contribute(&u2);
+    client.contribute(&u3);
+    // Pot = 200 (100 * 2 members).
+    let u2_after = token_client.balance(&u2);
+    assert_eq!(u2_after, u2_before - 100 + 200,
+        "u2 should receive the round 0 pot after u1 exits");
+}
+
+
+
+// ---------------------------------------------------------------
+// 9. Exited members are NOT counted as defaulters after close_round
+// ---------------------------------------------------------------
+#[test]
+fn test_exited_member_skipped_in_defaulters_list() {
+    let env = Env::default();
+    let (client, _admin, u1, u2, u3, _tc, _ta) = setup_exit_env(&env);
+
+    // u1 exits before the first round deadline
+    client.request_emergency_exit(&u1);
+    client.approve_exit(&u1);
+
+    // Only u2 contributes; u3 does not
+    client.contribute(&u2);
+
+    // Advance past deadline
+    env.ledger().set_timestamp(3601);
+    client.close_round();
+
+    // u3 should be a defaulter, u1 should NOT (they've exited)
+    // We verify by checking that penalising u1 panics
+    let result = client.try_penalise_defaulter(&u1);
+    assert!(result.is_err(), "Exited member must not appear in defaulters");
+}
+
+// ---------------------------------------------------------------
+// 10. Exit with zero penalty: full refund of contributions.
+//     Use close_round to advance to round 1 while keeping
+//     u1's contribution in the contract.
+// ---------------------------------------------------------------
+#[test]
+fn test_exit_with_zero_penalty() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin_addr);
+    let token_client = TokenClient::new(&env, &token_admin_addr);
+
+    let u1 = Address::generate(&env);
+    let u2 = Address::generate(&env);
+
+    token_admin_client.mint(&u1, &2000);
+    token_admin_client.mint(&u2, &2000);
+
+    let members = vec![&env, u1.clone(), u2.clone()];
+    client.init(
+        &admin,
+        &members,
+        &100,
+        &token_admin_addr,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,    // defaulter penalty disabled
+        &0,    // exit_penalty_bps = 0%  (no penalty)
+    );
+
+    // u1 contributes in round 0 but u2 does NOT → round never auto-completes.
+    // u1's 100 tokens remain in the contract.
+    client.contribute(&u1);
+
+    // Let deadline pass and close round so CurrentRound becomes 1.
+    env.ledger().set_timestamp(3601);
+    client.close_round();
+
+    // CurrentRound = 1. u1 has contributed 1 round. penalty = 0. refund = 100.
+    let u1_balance_before = token_client.balance(&u1);
+    client.request_emergency_exit(&u1);
+
+    let req = client.get_exit_requests().get(u1.clone()).unwrap();
+    assert_eq!(req.penalty_amount, 0);
+    assert_eq!(req.refund_amount, 100); // full refund
+
+    client.approve_exit(&u1);
+    assert_eq!(token_client.balance(&u1), u1_balance_before + 100);
+}
+
+
+// ---------------------------------------------------------------
+// 11. Exit request emits the correct event
+// ---------------------------------------------------------------
+#[test]
+fn test_exit_request_event_emitted() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    client.request_emergency_exit(&u1);
+
+    let all_events = env.events().all();
+    let last = all_events.last().unwrap();
+    // Topic[0] should be the symbol "exit_req"
+    assert_eq!(
+        last.1,
+        vec![
+            &env,
+            symbol_short!("exit_req").into_val(&env),
+            u1.into_val(&env)
+        ]
+    );
+}
+
+// ---------------------------------------------------------------
+// 12. Approved exit emits the correct event
+// ---------------------------------------------------------------
+#[test]
+fn test_exit_approval_event_emitted() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    client.request_emergency_exit(&u1);
+    client.approve_exit(&u1);
+
+    let all_events = env.events().all();
+    let last = all_events.last().unwrap();
+    assert_eq!(
+        last.1,
+        vec![
+            &env,
+            symbol_short!("exit_ok").into_val(&env),
+            u1.into_val(&env)
+        ]
+    );
 }
