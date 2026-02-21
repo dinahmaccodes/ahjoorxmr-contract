@@ -445,7 +445,7 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::ApprovedTokens)
             .unwrap_or(Vec::new(&env));
-            
+
         if !approved_tokens.contains(&token) {
             approved_tokens.push_back(token.clone());
             env.storage()
@@ -468,7 +468,7 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::ApprovedTokens)
             .unwrap_or(Vec::new(&env));
-            
+
         if approved_tokens.contains(&token) {
             let mut new_approved_tokens: Vec<Address> = Vec::new(&env);
             for t in approved_tokens.iter() {
@@ -560,11 +560,7 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::Strategy)
             .unwrap_or(PayoutStrategy::RoundRobin);
-        let token: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Token)
-            .unwrap();
+        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         (current_round, paid_members, deadline, strategy, token)
     }
 

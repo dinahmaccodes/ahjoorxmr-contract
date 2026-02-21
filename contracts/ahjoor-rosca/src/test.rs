@@ -1172,16 +1172,20 @@ fn test_add_and_remove_approved_token() {
     let token2 = Address::generate(&setup.env);
 
     // Initial state: any token works because whitelist is empty.
-    
+
     // We must manually set Admin so the auth check passes.
     // Normally init does this, but we want to test whitelist methods independently.
     setup.env.as_contract(&setup.client.address, || {
-        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
+        setup
+            .env
+            .storage()
+            .instance()
+            .set(&DataKey::Admin, &setup.admin);
     });
     setup.client.add_approved_token(&token1);
 
     // After this, only token1 should be allowed during init.
-    
+
     // Add token2 to whitelist
     setup.client.add_approved_token(&token2);
 
@@ -1194,10 +1198,14 @@ fn test_init_with_approved_token() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone()];
-    
+
     // Add the specific token admin to whitelist
     setup.env.as_contract(&setup.client.address, || {
-        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
+        setup
+            .env
+            .storage()
+            .instance()
+            .set(&DataKey::Admin, &setup.admin);
     });
     setup.client.add_approved_token(&setup.token_admin);
 
@@ -1220,12 +1228,16 @@ fn test_init_with_unapproved_token_panics() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone()];
-    
+
     // Set admin
     setup.env.as_contract(&setup.client.address, || {
-        setup.env.storage().instance().set(&DataKey::Admin, &setup.admin);
+        setup
+            .env
+            .storage()
+            .instance()
+            .set(&DataKey::Admin, &setup.admin);
     });
-    
+
     // Add some other token to whitelist
     let other_token = Address::generate(&setup.env);
     setup.client.add_approved_token(&other_token);
@@ -1249,8 +1261,12 @@ fn test_init_with_unapproved_token_panics() {
 #[should_panic(expected = "Already initialized")]
 fn test_init_twice_panics() {
     let setup = setup_env();
-    let members = vec![&setup.env, Address::generate(&setup.env), Address::generate(&setup.env)];
-    
+    let members = vec![
+        &setup.env,
+        Address::generate(&setup.env),
+        Address::generate(&setup.env),
+    ];
+
     // First init
     setup.client.init(
         &setup.admin,
@@ -1284,7 +1300,7 @@ fn test_contribute_non_member_panics() {
     let u2 = Address::generate(&setup.env);
     let non_member = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone(), u2.clone()];
-    
+
     setup.client.init(
         &setup.admin,
         &members,
@@ -1307,7 +1323,7 @@ fn test_contribute_twice_panics() {
     let u1 = Address::generate(&setup.env);
     let u2 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone(), u2.clone()];
-    
+
     setup.token_admin_client.mint(&u1, &1000);
 
     setup.client.init(
@@ -1323,7 +1339,7 @@ fn test_contribute_twice_panics() {
 
     // First contribution
     setup.client.contribute(&u1);
-    
+
     // Second contribution by the same member in the same round should panic
     setup.client.contribute(&u1);
 }
@@ -1336,7 +1352,7 @@ fn test_payout_correct_member_n_group() {
     let u3 = Address::generate(&setup.env);
     let u4 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone(), u2.clone(), u3.clone(), u4.clone()];
-    
+
     for u in [&u1, &u2, &u3, &u4] {
         setup.token_admin_client.mint(u, &1000);
     }
@@ -1357,7 +1373,7 @@ fn test_payout_correct_member_n_group() {
     setup.client.contribute(&u2);
     setup.client.contribute(&u3);
     setup.client.contribute(&u4);
-    
+
     // u1 history: 1000 - 100 + 400 = 1300
     assert_eq!(setup.token_client.balance(&u1), 1300);
 
@@ -1378,7 +1394,7 @@ fn test_payout_correct_member_n_group() {
 
     // u3 history: 1000 - 100(R0) - 100(R1) - 100(R2) + 400 = 1100
     assert_eq!(setup.token_client.balance(&u3), 1100);
-    
+
     // Round 3: u4 gets the pot
     setup.client.contribute(&u1);
     setup.client.contribute(&u2);
@@ -1387,7 +1403,7 @@ fn test_payout_correct_member_n_group() {
 
     // u4 history: 1000 - 100(R0) - 100(R1) - 100(R2) - 100(R3) + 400 = 1000
     assert_eq!(setup.token_client.balance(&u4), 1000);
-        
+
     // u1 loses 100 in R1, R2, R3 (total 300) -> 1300 - 300 = 1000
     assert_eq!(setup.token_client.balance(&u1), 1000);
 }
@@ -1398,7 +1414,7 @@ fn test_contract_balance_zero_after_round() {
     let u1 = Address::generate(&setup.env);
     let u2 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone(), u2.clone()];
-    
+
     for u in [&u1, &u2] {
         setup.token_admin_client.mint(u, &1000);
     }
@@ -1432,7 +1448,7 @@ fn test_single_member_rosca() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone()];
-    
+
     setup.token_admin_client.mint(&u1, &1000);
 
     setup.client.init(
@@ -1448,10 +1464,10 @@ fn test_single_member_rosca() {
 
     // Single member contributes, should immediately complete round and payout to self
     setup.client.contribute(&u1);
-    
+
     // Balance remains 1000 (spent 100, received 100 immediately)
     assert_eq!(setup.token_client.balance(&u1), 1000);
-    
+
     // State should now be round 1
     let state = setup.client.get_state();
     assert_eq!(state.0, 1);
@@ -1462,7 +1478,7 @@ fn test_large_group_rosca() {
     let setup = setup_env();
     let mut member_addresses = alloc::vec::Vec::new();
     let mut members = soroban_sdk::Vec::new(&setup.env);
-    
+
     // 10 members
     for _ in 0..10 {
         let addr = Address::generate(&setup.env);
@@ -1488,12 +1504,12 @@ fn test_large_group_rosca() {
             setup.client.contribute(m);
         }
     }
-    
+
     // At the end of 10 rounds, everyone should have exactly back what they started with
     for m in member_addresses.iter() {
         assert_eq!(setup.token_client.balance(m), 2000);
     }
-    
+
     let state = setup.client.get_state();
     assert_eq!(state.0, 10); // completed 10 rounds
 }
@@ -1504,7 +1520,7 @@ fn test_get_state_lifecycle_details() {
     let u1 = Address::generate(&setup.env);
     let u2 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone(), u2.clone()];
-    
+
     for u in [&u1, &u2] {
         setup.token_admin_client.mint(u, &1000);
     }
@@ -1541,7 +1557,7 @@ fn test_get_state_lifecycle_details() {
     // After a round
     setup.env.ledger().set_timestamp(200); // Advance time slightly
     setup.client.contribute(&u2); // Completes the round
-    
+
     let (round_after, paid_after, deadline_after, _, _) = setup.client.get_state();
     assert_eq!(round_after, 1);
     assert_eq!(paid_after.len(), 0);
@@ -1553,7 +1569,7 @@ fn test_bump_storage() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
     let members = vec![&setup.env, u1.clone()];
-    
+
     setup.token_admin_client.mint(&u1, &1000);
 
     setup.client.init(
@@ -1571,7 +1587,10 @@ fn test_bump_storage() {
     setup.client.bump_storage();
 
     // Advance ledger far into the future
-    setup.env.ledger().set_sequence_number(setup.env.ledger().sequence() + 50_000);
+    setup
+        .env
+        .ledger()
+        .set_sequence_number(setup.env.ledger().sequence() + 50_000);
 
     // Verify contract is still accessible
     let (round, paid, _, _, _) = setup.client.get_state();
