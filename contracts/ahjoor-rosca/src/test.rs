@@ -1597,3 +1597,110 @@ fn test_bump_storage() {
     assert_eq!(round, 0);
     assert_eq!(paid.len(), 0);
 }
+
+#[test]
+fn test_reward_distribution_scenarios() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+    
+    setup.token_admin_client.mint(&u1, &1000);
+    setup.token_admin_client.mint(&u2, &1000);
+    setup.token_admin_client.mint(&setup.admin, &1000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // 1. Deposit Rewards
+    setup.client.deposit_rewards(&setup.admin, &200);
+    
+    // 2. Equal Distribution (Default)
+    assert_eq!(setup.client.get_claimable_reward(&u1), 100);
+    assert_eq!(setup.client.get_claimable_reward(&u2), 100);
+
+    // 3. Proportional Distribution
+    setup.client.set_reward_dist_params(&DistributionType::Proportional, &None);
+    // No participations yet
+    assert_eq!(setup.client.get_claimable_reward(&u1), 0);
+    
+    setup.client.contribute(&u1);
+    // u1 has 1 participation, total 1 -> 200 * 1/1 = 200
+    assert_eq!(setup.client.get_claimable_reward(&u1), 200);
+    assert_eq!(setup.client.get_claimable_reward(&u2), 0);
+
+    setup.client.contribute(&u2);
+    // u1 has 1, u2 has 1, total 2 -> 200 * 1/2 = 100 each
+    assert_eq!(setup.client.get_claimable_reward(&u1), 100);
+    assert_eq!(setup.client.get_claimable_reward(&u2), 100);
+
+    // 4. Weighted Distribution
+    let mut weights: Map<Address, u32> = Map::new(&setup.env);
+    weights.set(u1.clone(), 3);
+    weights.set(u2.clone(), 1);
+    setup.client.set_reward_dist_params(&DistributionType::Weighted, &Some(weights));
+    // u1: 200 * 3/4 = 150, u2: 200 * 1/4 = 50
+    assert_eq!(setup.client.get_claimable_reward(&u1), 150);
+    assert_eq!(setup.client.get_claimable_reward(&u2), 50);
+
+    // 5. Claim Rewards
+    let u1_balance_before = setup.token_client.balance(&u1);
+    setup.client.claim_rewards(&u1);
+    assert_eq!(setup.token_client.balance(&u1), u1_balance_before + 150);
+    assert_eq!(setup.client.get_claimable_reward(&u1), 0);
+
+    // 6. Deposit More Rewards
+    setup.client.deposit_rewards(&setup.admin, &100);
+    // Total pool is now 300. 
+    // u1 share: 300 * 3/4 = 225. Claimed: 150. Claimable: 75
+    // u2 share: 300 * 1/4 = 75. Claimed: 0. Claimable: 75
+    assert_eq!(setup.client.get_claimable_reward(&u1), 75);
+    assert_eq!(setup.client.get_claimable_reward(&u2), 75);
+}
+
+#[test]
+fn test_contribution_pot_separation() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+    
+    setup.token_admin_client.mint(&u1, &1000);
+    setup.token_admin_client.mint(&u2, &1000);
+    setup.token_admin_client.mint(&setup.admin, &1000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+    );
+
+    // Deposit rewards
+    setup.client.deposit_rewards(&setup.admin, &500);
+
+    // Complete a round
+    let u1_balance_before = setup.token_client.balance(&u1);
+    setup.client.contribute(&u1);
+    setup.client.contribute(&u2);
+
+    // u1 was recipient. Pot should be exactly 200 (100 * 2), NOT including rewards.
+    // u1 balance: 1000 (start) - 100 (contrib) + 200 (pot) = 1100
+    assert_eq!(setup.token_client.balance(&u1), 1100);
+    
+    // Rewards pool should still be intact (500)
+    assert_eq!(setup.client.get_claimable_reward(&u1), 250); // Equal share
+    assert_eq!(setup.client.get_claimable_reward(&u2), 250);
+}
