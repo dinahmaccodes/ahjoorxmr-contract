@@ -5,7 +5,7 @@ use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    vec, Address, Env, IntoVal,
+    symbol_short, vec, Address, Env, IntoVal, Symbol,
 };
 
 pub struct TestSetup<'a> {
@@ -2511,3 +2511,74 @@ fn test_overpayment_rejected() {
     client.contribute(&u1, &60); // should panic
 }
 
+#[test]
+fn test_emit_deadline_reminder() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+    
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
+    );
+    
+    setup.env.ledger().set_timestamp(100);
+    
+    // u1 contributes
+    setup.token_admin_client.mint(&u1, &100);
+    setup.client.contribute(&u1);
+    
+    // Emit reminder
+    setup.client.emit_deadline_reminder(&symbol_short!("24h"));
+    
+    let events = setup.env.events().all();
+    let reminder_event = events.get(events.len() - 1).unwrap();
+    
+    // Topic check: (reminder,)
+    assert_eq!(reminder_event.1, vec![&setup.env, symbol_short!("reminder").into_val(&setup.env)]);
+    
+    // Data check: (round, time_remaining, non_contributors, interval)
+    let (round, time_remaining, non_contributors, interval): (u32, u64, Vec<Address>, Symbol) = 
+        reminder_event.2.into_val(&setup.env);
+    
+    assert_eq!(round, 0);
+    assert_eq!(time_remaining, 3500); // 3600 - 100
+    assert_eq!(non_contributors.len(), 1);
+    assert!(non_contributors.contains(&u2));
+    assert_eq!(interval, symbol_short!("24h"));
+}
+
+#[test]
+fn test_get_upcoming_deadlines() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone()];
+    
+    setup.env.ledger().set_timestamp(100);
+    
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
+    );
+    
+    let deadlines = setup.client.get_upcoming_deadlines(&3);
+    assert_eq!(deadlines.len(), 3);
+    assert_eq!(deadlines.get(0).unwrap(), 3700); // 100 + 3600
+    assert_eq!(deadlines.get(1).unwrap(), 7300); // 3700 + 3600
+    assert_eq!(deadlines.get(2).unwrap(), 10900); // 7300 + 3600
+}

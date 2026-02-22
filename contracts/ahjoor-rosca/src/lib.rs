@@ -1048,6 +1048,84 @@ impl AhjoorContract {
         (current_round, paid_members, deadline, strategy, token)
     }
 
+    pub fn emit_deadline_reminder(env: Env, interval: Symbol) {
+        Self::check_not_paused(&env);
+
+        let current_round: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentRound)
+            .unwrap_or(0);
+        let deadline: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RoundDeadline)
+            .unwrap_or(0);
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        let paid_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaidMembers)
+            .unwrap_or(Vec::new(&env));
+        let exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env));
+
+        let current_time = env.ledger().timestamp();
+        let time_remaining = if deadline > current_time {
+            deadline - current_time
+        } else {
+            0
+        };
+
+        let mut non_contributors = Vec::new(&env);
+        for member in members.iter() {
+            if !paid_members.contains(&member) && !exited_members.contains(&member) {
+                non_contributors.push_back(member);
+            }
+        }
+
+        env.events().publish(
+            (symbol_short!("reminder"),),
+            (current_round, time_remaining, non_contributors, interval),
+        );
+    }
+
+    pub fn get_upcoming_deadlines(env: Env, count: u32) -> Map<u32, u64> {
+        let current_round: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentRound)
+            .unwrap_or(0);
+        let current_deadline: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RoundDeadline)
+            .unwrap_or(0);
+        let round_duration: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RoundDuration)
+            .unwrap_or(0);
+
+        let mut deadlines = Map::new(&env);
+        for i in 0..count {
+            let round = current_round + i;
+            let deadline = if i == 0 {
+                current_deadline
+            } else {
+                current_deadline + (i as u64 * round_duration)
+            };
+            deadlines.set(round, deadline);
+        }
+    }
+  
     pub fn get_savings_progress(
         env: Env,
         member: Option<Address>,
