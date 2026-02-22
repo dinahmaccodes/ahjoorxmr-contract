@@ -124,10 +124,9 @@ fn test_cannot_close_early() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -165,10 +164,9 @@ fn test_on_time_contribution() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -206,10 +204,9 @@ fn test_late_contribution_rejection() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -241,10 +238,9 @@ fn test_admin_close_round() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -290,10 +286,9 @@ fn test_admin_assigned_strategy_execution() {
             strategy: PayoutStrategy::AdminAssigned,
             custom_order: Some(custom_order),
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -327,10 +322,9 @@ fn test_invalid_admin_order_validation() {
             strategy: PayoutStrategy::AdminAssigned,
             custom_order: Some(bad_order),
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 }
@@ -370,10 +364,9 @@ fn test_round_robin_e2e_all_rounds() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -424,10 +417,9 @@ fn test_admin_assigned_e2e_all_rounds() {
             strategy: PayoutStrategy::AdminAssigned,
             custom_order: Some(custom_order),
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -475,10 +467,9 @@ fn test_verify_contract_events() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -563,8 +554,8 @@ fn test_single_defaulter_penalty() {
             custom_order: None,
             penalty_amount: penalty_amount,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -623,8 +614,8 @@ fn test_multiple_defaulters_penalty() {
             custom_order: None,
             penalty_amount: penalty_amount,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -679,8 +670,8 @@ fn test_member_suspension_after_two_defaults() {
             custom_order: None,
             penalty_amount: penalty_amount,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -742,8 +733,8 @@ fn test_suspended_member_skipped_in_payout() {
             custom_order: None,
             penalty_amount: penalty_amount,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -807,10 +798,9 @@ fn test_cannot_penalise_before_deadline() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 50,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -842,10 +832,9 @@ fn test_penalty_disabled_when_amount_zero() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount disabled
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged) disabled
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -886,10 +875,9 @@ fn test_cannot_penalise_non_defaulter() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 50,
-            exit_penalty_bps: // penalty_amount
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0, // (merged)
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -934,8 +922,8 @@ fn test_read_interface_lifecycle() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1005,8 +993,8 @@ fn test_member_status_resets_after_round() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1060,8 +1048,8 @@ fn test_add_member_before_round() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1112,8 +1100,8 @@ fn test_add_member_mid_round_panics() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1157,8 +1145,8 @@ fn test_remove_member_between_rounds() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1211,8 +1199,8 @@ fn test_remove_member_mid_round_panics() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1258,8 +1246,8 @@ fn test_remove_member_who_already_received_payout() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1353,8 +1341,8 @@ fn test_init_with_approved_token() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 }
@@ -1391,8 +1379,8 @@ fn test_init_with_unapproved_token_panics() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 }
@@ -1421,8 +1409,8 @@ fn test_init_twice_panics() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1438,8 +1426,8 @@ fn test_init_twice_panics() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 }
@@ -1464,8 +1452,8 @@ fn test_contribute_non_member_panics() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1494,8 +1482,8 @@ fn test_contribute_twice_panics() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1530,8 +1518,8 @@ fn test_payout_correct_member_n_group() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1597,8 +1585,8 @@ fn test_contract_balance_zero_after_round() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1634,8 +1622,8 @@ fn test_single_member_rosca() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1675,8 +1663,8 @@ fn test_large_group_rosca() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1721,8 +1709,8 @@ fn test_get_state_lifecycle_details() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1770,8 +1758,8 @@ fn test_bump_storage() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1812,8 +1800,8 @@ fn test_reward_distribution_scenarios() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1889,8 +1877,8 @@ fn test_contribution_pot_separation() {
             custom_order: None,
             penalty_amount: 0,
             exit_penalty_bps: 0,
-            collective_goal: ,
-            member_goals: None
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -1958,11 +1946,10 @@ fn setup_exit_env(
         &RoscaConfig {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: // penalty_amount (defaulter penalty, distinct from exit penalty)
-        &1000,
-            collective_goal: ,
-            member_goals: None
+            penalty_amount: 1000,
+            exit_penalty_bps: 1000,
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -2233,10 +2220,9 @@ fn test_exit_with_zero_penalty() {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
             penalty_amount: 0,
-            exit_penalty_bps: // defaulter penalty disabled
-        &0,
-            collective_goal: ,
-            member_goals: None
+            exit_penalty_bps: 0,
+            collective_goal: None,
+            member_goals: None,
         },
     );
 
@@ -2510,7 +2496,8 @@ fn test_collective_savings_goal() {
     let last_event = events.last().unwrap();
     // Milestone 25 reached
     assert_eq!(last_event.1, vec![&setup.env, symbol_short!("milestone").into_val(&setup.env), 25u32.into_val(&setup.env)]);
-    assert_eq!(last_event.2, 100i128.into_val(&setup.env));
+    let milestone_data_1: i128 = soroban_sdk::FromVal::from_val(&setup.env, &last_event.2);
+    assert_eq!(milestone_data_1, 100i128);
 
     // 2nd contribution (50%)
     setup.client.contribute(&u2);
@@ -2518,7 +2505,8 @@ fn test_collective_savings_goal() {
     let last_event = events.last().unwrap();
     // Milestone 50 reached
     assert_eq!(last_event.1, vec![&setup.env, symbol_short!("milestone").into_val(&setup.env), 50u32.into_val(&setup.env)]);
-    assert_eq!(last_event.2, 200i128.into_val(&setup.env));
+    let milestone_data_2: i128 = soroban_sdk::FromVal::from_val(&setup.env, &last_event.2);
+    assert_eq!(milestone_data_2, 200i128);
 
     let (total, goal, _, _) = setup.client.get_savings_progress(&None);
     assert_eq!(total, 200i128);
