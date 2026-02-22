@@ -585,6 +585,46 @@ impl AhjoorContract {
             env.events().publish((symbol_short!("tok_rmv"),), token);
         }
     }
+    
+    pub fn set_exchange_rate(env: Env, token: Address, rate: i128) {
+        Self::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let mut rates: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExchangeRates)
+            .unwrap_or(Map::new(&env));
+
+        rates.set(token.clone(), rate);
+        env.storage().instance().set(&DataKey::ExchangeRates, &rates);
+        env.events().publish((symbol_short!("rate_set"),), (token, rate));
+    }
+
+    pub fn set_token_limit(env: Env, token: Address, limit: i128) {
+        Self::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let mut limits: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenLimits)
+            .unwrap_or(Map::new(&env));
+
+        limits.set(token.clone(), limit);
+        env.storage().instance().set(&DataKey::TokenLimits, &limits);
+        env.events().publish((symbol_short!("lim_set"),), (token, limit));
+    }
 
     pub fn bump_storage(env: Env) {
         env.storage()
