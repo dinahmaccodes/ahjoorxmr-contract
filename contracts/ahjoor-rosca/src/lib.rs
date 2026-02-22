@@ -81,6 +81,8 @@ pub enum DataKey {
     IsPaused,            // bool
     PauseReason,         // String
     PauseTimestamp,      // u64
+    ExchangeRates,       // Map<Address, i128>
+    TokenLimits,         // Map<Address, i128>
 }
 
 #[contract]
@@ -144,6 +146,20 @@ impl AhjoorContract {
             .instance()
             .set(&DataKey::ContributionAmt, &contribution_amount);
         env.storage().instance().set(&DataKey::Token, &token);
+
+        // Auto-approve the base token
+        let mut approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !approved_tokens.contains(&token) {
+            approved_tokens.push_back(token.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::ApprovedTokens, &approved_tokens);
+        }
+
         env.storage().instance().set(&DataKey::CurrentRound, &0u32);
         env.storage()
             .instance()
@@ -206,7 +222,7 @@ impl AhjoorContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
-    pub fn contribute(env: Env, contributor: Address) {
+    pub fn contribute(env: Env, contributor: Address, token: Address) {
         Self::check_not_paused(&env);
         contributor.require_auth();
 
@@ -246,24 +262,64 @@ impl AhjoorContract {
             panic!("Already contributed for this round");
         }
 
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
-        let client = token::Client::new(&env, &token_addr);
-        let amount: i128 = env
+        // Validate token
+        let approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !approved_tokens.contains(&token) {
+            panic!("Token not approved");
+        }
+
+        let base_token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let base_amount: i128 = env
             .storage()
             .instance()
             .get(&DataKey::ContributionAmt)
             .unwrap();
+
+        let amount_to_transfer = if token == base_token {
+            base_amount
+        } else {
+            let rates: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&DataKey::ExchangeRates)
+                .unwrap_or(Map::new(&env));
+            let rate = rates.get(token.clone()).expect("Exchange rate not set");
+            if rate <= 0 {
+                panic!("Invalid exchange rate");
+            }
+            // Valuation logic: RequiredAmount = (BaseAmount * 10^7) / Rate
+            // Rate is expected to be in 10^7 precision (e.g., 1.5 * 10^7 = 15,000,000)
+            (base_amount * 10_000_000) / rate
+        };
+
+        // Check token-specific limits
+        let limits: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenLimits)
+            .unwrap_or(Map::new(&env));
+        if let Some(limit) = limits.get(token.clone()) {
+            if amount_to_transfer > limit {
+                panic!("Contribution exceeds token limit");
+            }
+        }
+
+        let client = token::Client::new(&env, &token);
+        client.transfer(&contributor, &env.current_contract_address(), &amount_to_transfer);
+
         let current_round: u32 = env
             .storage()
             .instance()
             .get(&DataKey::CurrentRound)
             .unwrap_or(0);
 
-        client.transfer(&contributor, &env.current_contract_address(), &amount);
-
         env.events().publish(
             (symbol_short!("contrib"), contributor.clone(), current_round),
-            amount,
+            (token, amount_to_transfer),
         );
 
         paid_members.push_back(contributor.clone());
@@ -295,7 +351,7 @@ impl AhjoorContract {
             .set(&DataKey::MemberParticipation, &member_participation);
 
         if paid_members.len() == members.len() {
-            Self::complete_round_payout(&env, &paid_members, amount, client);
+            Self::complete_round_payout(&env, &paid_members);
         }
 
         env.storage()
@@ -583,6 +639,46 @@ impl AhjoorContract {
             env.events().publish((symbol_short!("tok_rmv"),), token);
         }
     }
+    
+    pub fn set_exchange_rate(env: Env, token: Address, rate: i128) {
+        Self::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let mut rates: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExchangeRates)
+            .unwrap_or(Map::new(&env));
+
+        rates.set(token.clone(), rate);
+        env.storage().instance().set(&DataKey::ExchangeRates, &rates);
+        env.events().publish((symbol_short!("rate_set"),), (token, rate));
+    }
+
+    pub fn set_token_limit(env: Env, token: Address, limit: i128) {
+        Self::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let mut limits: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenLimits)
+            .unwrap_or(Map::new(&env));
+
+        limits.set(token.clone(), limit);
+        env.storage().instance().set(&DataKey::TokenLimits, &limits);
+        env.events().publish((symbol_short!("lim_set"),), (token, limit));
+    }
 
     pub fn bump_storage(env: Env) {
         env.storage()
@@ -816,6 +912,27 @@ impl AhjoorContract {
             .unwrap_or(PayoutStrategy::RoundRobin);
         let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         (current_round, paid_members, deadline, strategy, token)
+    }
+
+    pub fn get_exchange_rates(env: Env) -> Map<Address, i128> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ExchangeRates)
+            .unwrap_or(Map::new(&env))
+    }
+
+    pub fn get_token_limits(env: Env) -> Map<Address, i128> {
+        env.storage()
+            .instance()
+            .get(&DataKey::TokenLimits)
+            .unwrap_or(Map::new(&env))
+    }
+
+    pub fn get_approved_tokens(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env))
     }
 
     // --- EMERGENCY EXIT ---
@@ -1126,8 +1243,6 @@ impl AhjoorContract {
     fn complete_round_payout(
         env: &Env,
         _paid_members: &Vec<Address>,
-        _amount: i128,
-        client: token::Client,
     ) {
         let current_round: u32 = env
             .storage()
@@ -1147,7 +1262,7 @@ impl AhjoorContract {
             .get(&DataKey::ExitedMembers)
             .unwrap_or(Vec::new(env));
 
-        let mut recipient_idx = current_round % payout_order.len();
+        let mut recipient_idx = (current_round % payout_order.len()) as u32;
         let mut attempts = 0;
         while attempts < payout_order.len() {
             let potential_recipient = payout_order.get(recipient_idx).unwrap();
@@ -1170,14 +1285,38 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::RewardPool)
             .unwrap_or(0);
-        let total_balance = client.balance(&env.current_contract_address());
-        let total_pot = total_balance - reward_pool;
+        let base_token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        
+        // Track total payout for history (simplified as base token equivalent or just base token if we want to be simple)
+        // For now, let's just record the base token payout or total balance of base token.
+        // Actually, the PR description says "Payout calculations account for multi-token contributions".
+        // We'll transfer ALL approved tokens.
+        
+        let approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(env));
+        
+        let mut total_payout_history_amt = 0i128;
 
-        client.transfer(
-            &env.current_contract_address(),
-            &payout_recipient,
-            &total_pot,
-        );
+        for token_addr in approved_tokens.iter() {
+            let client = token::Client::new(env, &token_addr);
+            let mut balance = client.balance(&env.current_contract_address());
+            
+            if token_addr == base_token {
+                balance -= reward_pool;
+                total_payout_history_amt = balance; // We record the base token amount for history
+            }
+            
+            if balance > 0 {
+                client.transfer(
+                    &env.current_contract_address(),
+                    &payout_recipient,
+                    &balance,
+                );
+            }
+        }
 
         // Record history before resetting
         let mut history: Vec<PayoutRecord> = env
@@ -1187,7 +1326,7 @@ impl AhjoorContract {
             .unwrap_or(Vec::new(env));
         history.push_back(PayoutRecord {
             recipient: payout_recipient.clone(),
-            amount: total_pot,
+            amount: total_payout_history_amt,
         });
         env.storage()
             .instance()
@@ -1195,7 +1334,7 @@ impl AhjoorContract {
 
         env.events().publish(
             (symbol_short!("rd_done"), current_round),
-            (payout_recipient, total_pot),
+            (payout_recipient, total_payout_history_amt),
         );
         Self::reset_round_state(env, current_round);
     }
