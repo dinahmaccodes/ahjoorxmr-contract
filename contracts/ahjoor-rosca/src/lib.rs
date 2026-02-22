@@ -1208,8 +1208,6 @@ impl AhjoorContract {
     fn complete_round_payout(
         env: &Env,
         _paid_members: &Vec<Address>,
-        _amount: i128,
-        client: token::Client,
     ) {
         let current_round: u32 = env
             .storage()
@@ -1229,7 +1227,7 @@ impl AhjoorContract {
             .get(&DataKey::ExitedMembers)
             .unwrap_or(Vec::new(env));
 
-        let mut recipient_idx = current_round % payout_order.len();
+        let mut recipient_idx = (current_round % payout_order.len()) as u32;
         let mut attempts = 0;
         while attempts < payout_order.len() {
             let potential_recipient = payout_order.get(recipient_idx).unwrap();
@@ -1252,14 +1250,38 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::RewardPool)
             .unwrap_or(0);
-        let total_balance = client.balance(&env.current_contract_address());
-        let total_pot = total_balance - reward_pool;
+        let base_token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        
+        // Track total payout for history (simplified as base token equivalent or just base token if we want to be simple)
+        // For now, let's just record the base token payout or total balance of base token.
+        // Actually, the PR description says "Payout calculations account for multi-token contributions".
+        // We'll transfer ALL approved tokens.
+        
+        let approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(env));
+        
+        let mut total_payout_history_amt = 0i128;
 
-        client.transfer(
-            &env.current_contract_address(),
-            &payout_recipient,
-            &total_pot,
-        );
+        for token_addr in approved_tokens.iter() {
+            let client = token::Client::new(env, &token_addr);
+            let mut balance = client.balance(&env.current_contract_address());
+            
+            if token_addr == base_token {
+                balance -= reward_pool;
+                total_payout_history_amt = balance; // We record the base token amount for history
+            }
+            
+            if balance > 0 {
+                client.transfer(
+                    &env.current_contract_address(),
+                    &payout_recipient,
+                    &balance,
+                );
+            }
+        }
 
         // Record history before resetting
         let mut history: Vec<PayoutRecord> = env
@@ -1269,7 +1291,7 @@ impl AhjoorContract {
             .unwrap_or(Vec::new(env));
         history.push_back(PayoutRecord {
             recipient: payout_recipient.clone(),
-            amount: total_pot,
+            amount: total_payout_history_amt,
         });
         env.storage()
             .instance()
@@ -1277,7 +1299,7 @@ impl AhjoorContract {
 
         env.events().publish(
             (symbol_short!("rd_done"), current_round),
-            (payout_recipient, total_pot),
+            (payout_recipient, total_payout_history_amt),
         );
         Self::reset_round_state(env, current_round);
     }
