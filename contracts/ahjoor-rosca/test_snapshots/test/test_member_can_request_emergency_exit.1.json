@@ -397,6 +397,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MemberContributions"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "MemberParticipation"
                             }
                           ]

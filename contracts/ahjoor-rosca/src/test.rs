@@ -73,22 +73,18 @@ fn test_rosca_flow_with_time_locks() {
         &amount,
         &token_admin,
         &duration,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(100);
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
     assert_eq!(token_client.balance(&user1), 900);
 
     env.ledger().set_timestamp(3601);
-    let result = client.try_contribute(&user2, &token_admin);
+    let result = client.try_contribute(&user2, &100);
     assert!(result.is_err());
 
     client.close_round();
@@ -99,7 +95,7 @@ fn test_rosca_flow_with_time_locks() {
     assert_eq!(deadline, 7201);
 
     env.ledger().set_timestamp(4000);
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
     assert_eq!(token_client.balance(&user1), 800);
 }
 
@@ -120,14 +116,10 @@ fn test_cannot_close_early() {
         &100,
         &Address::generate(&env),
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(500);
@@ -160,18 +152,14 @@ fn test_on_time_contribution() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(1000);
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
 
     assert_eq!(token_client.balance(&user1), 900);
     let (_, paid, _, _, _) = client.get_state();
@@ -200,18 +188,14 @@ fn test_late_contribution_rejection() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(3601);
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
 }
 
 #[test]
@@ -234,14 +218,10 @@ fn test_admin_close_round() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(3601);
@@ -282,18 +262,14 @@ fn test_admin_assigned_strategy_execution() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::AdminAssigned,
-            custom_order: Some(custom_order),
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::AdminAssigned,
+        &Some(custom_order),
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
-    client.contribute(&user1, &token_admin);
-    client.contribute(&user2, &token_admin);
+    client.contribute(&user1, &100);
+    client.contribute(&user2, &100);
 
     let token_client = TokenClient::new(&env, &token_admin);
     // User2 contributed 100, but was the recipient of the pot (200)
@@ -318,14 +294,10 @@ fn test_invalid_admin_order_validation() {
         &100,
         &Address::generate(&env),
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::AdminAssigned,
-            custom_order: Some(bad_order),
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::AdminAssigned,
+        &Some(bad_order),
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -360,25 +332,21 @@ fn test_round_robin_e2e_all_rounds() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // ROUND 0: u1 should get the payout
-    client.contribute(&u1, &token_admin);
-    client.contribute(&u2, &token_admin);
+    client.contribute(&u1, &100);
+    client.contribute(&u2, &100);
     // Math: 2000 (start) - 100 (spent) + 200 (pot) = 2100
     assert_eq!(token_client.balance(&u1), 2100);
 
     // ROUND 1: u2 should get the payout
-    client.contribute(&u1, &token_admin);
-    client.contribute(&u2, &token_admin);
+    client.contribute(&u1, &100);
+    client.contribute(&u2, &100);
     // Math: 2000 (start) - 100 (spent R0) - 100 (spent R1) + 200 (pot R1) = 2000
     assert_eq!(token_client.balance(&u2), 2000);
 }
@@ -413,24 +381,20 @@ fn test_admin_assigned_e2e_all_rounds() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::AdminAssigned,
-            custom_order: Some(custom_order),
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::AdminAssigned,
+        &Some(custom_order),
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // ROUND 0: u2 should get the payout first
-    client.contribute(&u1, &token_admin);
-    client.contribute(&u2, &token_admin);
+    client.contribute(&u1, &100);
+    client.contribute(&u2, &100);
     assert_eq!(token_client.balance(&u2), 2100);
 
     // ROUND 1: u1 should get the payout second
-    client.contribute(&u1, &token_admin);
-    client.contribute(&u2, &token_admin);
+    client.contribute(&u1, &100);
+    client.contribute(&u2, &100);
     assert_eq!(token_client.balance(&u1), 2000);
 }
 
@@ -463,14 +427,10 @@ fn test_verify_contract_events() {
         &amount,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount
+        &0, // exit_penalty_bps (no penalty)
     );
 
     let last_event = env.events().all().last().unwrap();
@@ -485,7 +445,7 @@ fn test_verify_contract_events() {
     assert_eq!(init_data, (2u32, amount));
 
     // 2. Verify ContributionReceived
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
 
     let contribution_event = env.events().all().last().unwrap();
     assert_eq!(
@@ -497,12 +457,12 @@ fn test_verify_contract_events() {
             0u32.into_val(&env)
         ]
     );
-    // Data check: Val -> (Address, i128)
-    let contrib_data: (Address, i128) = soroban_sdk::FromVal::from_val(&env, &contribution_event.2);
-    assert_eq!(contrib_data, (token_admin.clone(), amount));
+    // Data check: Val -> i128
+    let contrib_amt: i128 = soroban_sdk::FromVal::from_val(&env, &contribution_event.2);
+    assert_eq!(contrib_amt, amount);
 
     // 3. Verify RoundCompleted and RoundReset
-    client.contribute(&user2, &token_admin);
+    client.contribute(&user2, &100);
 
     let all_events = env.events().all();
     let reset_event = all_events.get(all_events.len() - 1).unwrap();
@@ -549,18 +509,14 @@ fn test_single_defaulter_penalty() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: penalty_amount,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Only user1 contributes
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
 
     // Wait for deadline to pass
     env.ledger().set_timestamp(3601);
@@ -609,18 +565,14 @@ fn test_multiple_defaulters_penalty() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: penalty_amount,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Only user1 contributes
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
 
     // Wait for deadline to pass
     env.ledger().set_timestamp(3601);
@@ -665,18 +617,14 @@ fn test_member_suspension_after_two_defaults() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: penalty_amount,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // ROUND 0: user2 defaults
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
     env.ledger().set_timestamp(3601);
     client.close_round();
     client.penalise_defaulter(&user2);
@@ -684,7 +632,7 @@ fn test_member_suspension_after_two_defaults() {
     // ROUND 1: user2 defaults again
     // After close_round, new deadline is set to current_timestamp + duration
     // So at 3601, new deadline would be 3601 + 3600 = 7201
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
     env.ledger().set_timestamp(7202); // Past the new deadline
     client.close_round();
     client.penalise_defaulter(&user2);
@@ -728,27 +676,23 @@ fn test_suspended_member_skipped_in_payout() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: penalty_amount,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &penalty_amount,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Suspend user2 by making them default twice
     // ROUND 0: user2 defaults
-    client.contribute(&user1, &token_admin);
-    client.contribute(&user3, &token_admin);
+    client.contribute(&user1, &100);
+    client.contribute(&user3, &100);
     env.ledger().set_timestamp(3601);
     client.close_round();
     client.penalise_defaulter(&user2);
 
     // ROUND 1: user2 defaults again (gets suspended)
-    client.contribute(&user1, &token_admin);
-    client.contribute(&user3, &token_admin);
+    client.contribute(&user1, &100);
+    client.contribute(&user3, &100);
     env.ledger().set_timestamp(7202);
     client.close_round();
     client.penalise_defaulter(&user2);
@@ -757,9 +701,10 @@ fn test_suspended_member_skipped_in_payout() {
     // Round 2 (index 2): 2 % 3 = 2, which is user3's turn
     // Since user2 is suspended, user3 should get the payout
     let user3_balance_before = token_client.balance(&user3);
-    client.contribute(&user1, &token_admin);
-    client.contribute(&user2, &token_admin); // user2 can still contribute
-    client.contribute(&user3, &token_admin);
+    client.contribute(&user1, &100);
+    client.contribute(&user2, &100); // user2 can still contribute
+
+    client.contribute(&user3, &100);
 
     // user3 should receive the payout (including penalty funds)
     let user3_balance_after = token_client.balance(&user3);
@@ -794,14 +739,10 @@ fn test_cannot_penalise_before_deadline() {
         &100,
         &Address::generate(&env),
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 50,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &50, // penalty_amount
+        &0,  // exit_penalty_bps (no penalty)
     );
 
     // Try to penalise before any round is closed (no defaulters identified yet)
@@ -828,14 +769,10 @@ fn test_penalty_disabled_when_amount_zero() {
         &100,
         &Address::generate(&env),
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0, // (merged) disabled
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // penalty_amount disabled
+        &0, // exit_penalty_bps (no penalty)
     );
 
     env.ledger().set_timestamp(3601);
@@ -871,19 +808,15 @@ fn test_cannot_penalise_non_defaulter() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 50,
-            exit_penalty_bps: 0, // (merged)
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &50, // penalty_amount
+        &0,  // exit_penalty_bps (no penalty)
     );
 
     // Both users contribute (no defaulters)
-    client.contribute(&user1, &token_admin);
-    client.contribute(&user2, &token_admin);
+    client.contribute(&user1, &100);
+    client.contribute(&user2, &100);
 
     // Try to penalise user1 who contributed
     client.penalise_defaulter(&user1);
@@ -917,14 +850,10 @@ fn test_read_interface_lifecycle() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     let info = client.get_group_info();
@@ -934,7 +863,7 @@ fn test_read_interface_lifecycle() {
     assert_eq!(client.get_round_history().len(), 0);
 
     // 2. STAGE: Mid-Round Contribution
-    client.contribute(&u1, &token_admin);
+    client.contribute(&u1, &100);
 
     // Verify member status
     assert_eq!(client.get_member_status(&u1), true);
@@ -946,7 +875,8 @@ fn test_read_interface_lifecycle() {
     assert!(info_mid.paid_members.contains(&u1));
 
     // 3. STAGE: Post-Payout (Round 0 Complete)
-    client.contribute(&u2, &token_admin); // This triggers complete_round_payout
+    client.contribute(&u2, &100); // This triggers complete_round_payout
+
 
     // Verify History
     let history = client.get_round_history();
@@ -988,23 +918,19 @@ fn test_member_status_resets_after_round() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // 1. u1 contributes. Round is NOT over because u2 hasn't paid.
-    client.contribute(&u1, &token_admin);
+    client.contribute(&u1, &100);
     assert_eq!(client.get_member_status(&u1), true);
     assert_eq!(client.get_group_info().current_round, 0);
 
     // 2. u2 contributes. This completes Round 0 and starts Round 1.
-    client.contribute(&u2, &token_admin);
+    client.contribute(&u2, &100);
 
     // 3. Now verify status is reset for the new round.
     assert_eq!(client.get_group_info().current_round, 1);
@@ -1043,14 +969,10 @@ fn test_add_member_before_round() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Add the new member before any round starts (paid_members is empty)
@@ -1095,18 +1017,14 @@ fn test_add_member_mid_round_panics() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // u1 contributes — now paid_members is non-empty (mid-round)
-    client.contribute(&u1, &token_admin);
+    client.contribute(&u1, &100);
 
     // Attempt to add a member mid-round — must panic
     client.add_member(&new_member);
@@ -1140,20 +1058,16 @@ fn test_remove_member_between_rounds() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Complete round 0 so paid_members is reset
-    client.contribute(&u1, &token_admin);
-    client.contribute(&u2, &token_admin);
-    client.contribute(&u3, &token_admin);
+    client.contribute(&u1, &100);
+    client.contribute(&u2, &100);
+    client.contribute(&u3, &100);
     // paid_members is now empty (round completed)
 
     // Remove u3 between rounds
@@ -1194,18 +1108,14 @@ fn test_remove_member_mid_round_panics() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // u1 contributes — mid-round state
-    client.contribute(&u1, &token_admin);
+    client.contribute(&u1, &100);
 
     // Attempt to remove a member mid-round — must panic
     client.remove_member(&u2);
@@ -1241,20 +1151,16 @@ fn test_remove_member_who_already_received_payout() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Round 0: u1 receives payout
-    client.contribute(&u1, &token_admin);
-    client.contribute(&u2, &token_admin);
-    client.contribute(&u3, &token_admin);
+    client.contribute(&u1, &100);
+    client.contribute(&u2, &100);
+    client.contribute(&u3, &100);
     let u1_after_r0 = token_client.balance(&u1);
     // u1 spent 100 and received 300 → net +200 = 3200
     assert_eq!(u1_after_r0, 3200);
@@ -1270,8 +1176,8 @@ fn test_remove_member_who_already_received_payout() {
     // Round 1 can proceed with the remaining two members — u2 should receive payout
     token_admin_client.mint(&u2, &200); // top u2 up so they have enough
     token_admin_client.mint(&u3, &200);
-    client.contribute(&u2, &token_admin);
-    client.contribute(&u3, &token_admin);
+    client.contribute(&u2, &100);
+    client.contribute(&u3, &100);
 
     // u2 gets the pot (200) — the contract still works correctly after removal
     // u2 started with 3000-200(r0 spend)+200(mint)=3000, spent 100 in r1, received 200
@@ -1336,14 +1242,10 @@ fn test_init_with_approved_token() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -1374,14 +1276,10 @@ fn test_init_with_unapproved_token_panics() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -1404,14 +1302,10 @@ fn test_init_twice_panics() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Second init should panic
@@ -1421,14 +1315,10 @@ fn test_init_twice_panics() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 }
 
@@ -1447,22 +1337,18 @@ fn test_contribute_non_member_panics() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Non-member trying to contribute
-    setup.client.contribute(&non_member, &setup.token_admin);
+    setup.client.contribute(&non_member, &100);
 }
 
 #[test]
-#[should_panic(expected = "Already contributed for this round")]
+#[should_panic(expected = "Already contributed full amount for this round")]
 fn test_contribute_twice_panics() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
@@ -1477,21 +1363,17 @@ fn test_contribute_twice_panics() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // First contribution
-    setup.client.contribute(&u1, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
 
     // Second contribution by the same member in the same round should panic
-    setup.client.contribute(&u1, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
 }
 
 #[test]
@@ -1513,48 +1395,44 @@ fn test_payout_correct_member_n_group() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Round 0: u1 gets the pot (4 * 100 = 400)
-    setup.client.contribute(&u1, &setup.token_admin);
-    setup.client.contribute(&u2, &setup.token_admin);
-    setup.client.contribute(&u3, &setup.token_admin);
-    setup.client.contribute(&u4, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
+    setup.client.contribute(&u2, &100);
+    setup.client.contribute(&u3, &100);
+    setup.client.contribute(&u4, &100);
 
     // u1 history: 1000 - 100 + 400 = 1300
     assert_eq!(setup.token_client.balance(&u1), 1300);
 
     // Round 1: u2 gets the pot
-    setup.client.contribute(&u1, &setup.token_admin);
-    setup.client.contribute(&u2, &setup.token_admin);
-    setup.client.contribute(&u3, &setup.token_admin);
-    setup.client.contribute(&u4, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
+    setup.client.contribute(&u2, &100);
+    setup.client.contribute(&u3, &100);
+    setup.client.contribute(&u4, &100);
 
     // u2 history: 1000 - 100(R0) - 100(R1) + 400 = 1200
     assert_eq!(setup.token_client.balance(&u2), 1200);
 
     // Round 2: u3 gets the pot
-    setup.client.contribute(&u1, &setup.token_admin);
-    setup.client.contribute(&u2, &setup.token_admin);
-    setup.client.contribute(&u3, &setup.token_admin);
-    setup.client.contribute(&u4, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
+    setup.client.contribute(&u2, &100);
+    setup.client.contribute(&u3, &100);
+    setup.client.contribute(&u4, &100);
 
     // u3 history: 1000 - 100(R0) - 100(R1) - 100(R2) + 400 = 1100
     assert_eq!(setup.token_client.balance(&u3), 1100);
 
     // Round 3: u4 gets the pot
-    setup.client.contribute(&u1, &setup.token_admin);
-    setup.client.contribute(&u2, &setup.token_admin);
-    setup.client.contribute(&u3, &setup.token_admin);
-    setup.client.contribute(&u4, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
+    setup.client.contribute(&u2, &100);
+    setup.client.contribute(&u3, &100);
+    setup.client.contribute(&u4, &100);
 
     // u4 history: 1000 - 100(R0) - 100(R1) - 100(R2) - 100(R3) + 400 = 1000
     assert_eq!(setup.token_client.balance(&u4), 1000);
@@ -1580,14 +1458,10 @@ fn test_contract_balance_zero_after_round() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Before contributions, balance is 0
@@ -1595,11 +1469,11 @@ fn test_contract_balance_zero_after_round() {
     assert_eq!(setup.token_client.balance(&current_contract_address), 0);
 
     // u1 contributes, balance is 100
-    setup.client.contribute(&u1, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
     assert_eq!(setup.token_client.balance(&current_contract_address), 100);
 
     // u2 contributes, finishes round, payout dispatched, balance should be 0
-    setup.client.contribute(&u2, &setup.token_admin);
+    setup.client.contribute(&u2, &100);
     assert_eq!(setup.token_client.balance(&current_contract_address), 0);
 }
 
@@ -1617,18 +1491,14 @@ fn test_single_member_rosca() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Single member contributes, should immediately complete round and payout to self
-    setup.client.contribute(&u1, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
 
     // Balance remains 1000 (spent 100, received 100 immediately)
     assert_eq!(setup.token_client.balance(&u1), 1000);
@@ -1658,20 +1528,16 @@ fn test_large_group_rosca() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Do 1 full cycle (10 rounds)
     for round_idx in 0..10 {
         for m in member_addresses.iter() {
-            setup.client.contribute(m, &setup.token_admin);
+            setup.client.contribute(m, &100);
         }
     }
 
@@ -1704,14 +1570,10 @@ fn test_get_state_lifecycle_details() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Before any contributions
@@ -1722,7 +1584,7 @@ fn test_get_state_lifecycle_details() {
     assert_eq!(strategy, PayoutStrategy::RoundRobin);
 
     // During a round
-    setup.client.contribute(&u1, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
     let (round_mid, paid_mid, deadline_mid, _, _) = setup.client.get_state();
     assert_eq!(round_mid, 0);
     assert_eq!(paid_mid.len(), 1);
@@ -1731,7 +1593,7 @@ fn test_get_state_lifecycle_details() {
 
     // After a round
     setup.env.ledger().set_timestamp(200); // Advance time slightly
-    setup.client.contribute(&u2, &setup.token_admin); // Completes the round
+    setup.client.contribute(&u2, &100); // Completes the round
 
     let (round_after, paid_after, deadline_after, _, _) = setup.client.get_state();
     assert_eq!(round_after, 1);
@@ -1753,14 +1615,10 @@ fn test_bump_storage() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Call bump_storage
@@ -1795,14 +1653,10 @@ fn test_reward_distribution_scenarios() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // 1. Deposit Rewards
@@ -1819,12 +1673,12 @@ fn test_reward_distribution_scenarios() {
     // No participations yet
     assert_eq!(setup.client.get_claimable_reward(&u1), 0);
 
-    setup.client.contribute(&u1, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
     // u1 has 1 participation, total 1 -> 200 * 1/1 = 200
     assert_eq!(setup.client.get_claimable_reward(&u1), 200);
     assert_eq!(setup.client.get_claimable_reward(&u2), 0);
 
-    setup.client.contribute(&u2, &setup.token_admin);
+    setup.client.contribute(&u2, &100);
     // u1 has 1, u2 has 1, total 2 -> 200 * 1/2 = 100 each
     assert_eq!(setup.client.get_claimable_reward(&u1), 100);
     assert_eq!(setup.client.get_claimable_reward(&u2), 100);
@@ -1872,14 +1726,10 @@ fn test_contribution_pot_separation() {
         &100,
         &setup.token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0, // exit_penalty_bps (no penalty)
     );
 
     // Deposit rewards
@@ -1887,8 +1737,8 @@ fn test_contribution_pot_separation() {
 
     // Complete a round
     let u1_balance_before = setup.token_client.balance(&u1);
-    setup.client.contribute(&u1, &setup.token_admin);
-    setup.client.contribute(&u2, &setup.token_admin);
+    setup.client.contribute(&u1, &100);
+    setup.client.contribute(&u2, &100);
 
     // u1 was recipient. Pot should be exactly 200 (100 * 2), NOT including rewards.
     // u1 balance: 1000 (start) - 100 (contrib) + 200 (pot) = 1100
@@ -1943,14 +1793,10 @@ fn setup_exit_env(
         &100,
         &token_admin_addr,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 1000,
-            exit_penalty_bps: 1000,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,    // penalty_amount (defaulter penalty, distinct from exit penalty)
+        &1000, // exit_penalty_bps = 10%
     );
 
     (client, admin, u1, u2, u3, token_client, token_admin_addr)
@@ -2021,7 +1867,7 @@ fn test_exit_request_rejected_mid_round() {
     let (client, _admin, u1, u2, _u3, _tc, _ta) = setup_exit_env(&env);
 
     // u2 contributes → round is in progress
-    client.contribute(&u2, &_ta);
+    client.contribute(&u2, &100);
 
     // u1 tries to exit mid-round → should panic
     client.request_emergency_exit(&u1);
@@ -2039,7 +1885,7 @@ fn test_admin_approves_exit_penalty_applied() {
 
     // u1 contributes in round 0. u2 does NOT (so the round never auto-completes).
     // Therefore the 100 tokens u1 sent remain in the contract.
-    client.contribute(&u1, &_ta);
+    client.contribute(&u1, &100);
 
     // Advance past deadline so admin can close the round.
     env.ledger().set_timestamp(3601);
@@ -2076,8 +1922,8 @@ fn test_admin_approves_exit_penalty_applied() {
     // u2 can still continue normally in round 1
     // At Round 1, recipient is originally u2 (1 % 3 = 1).
     let u2_before = token_client.balance(&u2);
-    client.contribute(&u2, &_ta);
-    client.contribute(&u3, &_ta); // Both must contribute to complete round with 2 members
+    client.contribute(&u2, &100);
+    client.contribute(&u3, &100); // Both must contribute to complete round with 2 members
 
     // Pot = 10 (penalty from u1's exit) + 200 (u2+u3 contributions) = 210 → goes to u2
     let u2_after = token_client.balance(&u2);
@@ -2123,7 +1969,7 @@ fn test_exited_member_cannot_contribute() {
     client.approve_exit(&u1);
 
     // u1 tries to contribute after exit — must panic
-    client.contribute(&u1, &_ta);
+    client.contribute(&u1, &100);
 }
 
 // ---------------------------------------------------------------
@@ -2144,8 +1990,8 @@ fn test_exited_member_skipped_in_payout_order() {
     // Now only u2 and u3 are members. Payout order is still 3.
     // Round 0 recipient was u1 (0 % 3 = 0). Since u1 is exited, it skips to u2 (1 % 3 = 1).
     let u2_before = token_client.balance(&u2);
-    client.contribute(&u2, &_ta);
-    client.contribute(&u3, &_ta);
+    client.contribute(&u2, &100);
+    client.contribute(&u3, &100);
     // Pot = 200 (100 * 2 members).
     let u2_after = token_client.balance(&u2);
     assert_eq!(
@@ -2168,7 +2014,7 @@ fn test_exited_member_skipped_in_defaulters_list() {
     client.approve_exit(&u1);
 
     // Only u2 contributes; u3 does not
-    client.contribute(&u2, &_ta);
+    client.contribute(&u2, &100);
 
     // Advance past deadline
     env.ledger().set_timestamp(3601);
@@ -2216,19 +2062,15 @@ fn test_exit_with_zero_penalty() {
         &100,
         &token_admin_addr,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0, // defaulter penalty disabled
+        &0, // exit_penalty_bps = 0%  (no penalty)
     );
 
     // u1 contributes in round 0 but u2 does NOT → round never auto-completes.
     // u1's 100 tokens remain in the contract.
-    client.contribute(&u1, &token_admin_addr);
+    client.contribute(&u1, &100);
 
     // Let deadline pass and close round so CurrentRound becomes 1.
     env.ledger().set_timestamp(3601);
@@ -2314,14 +2156,10 @@ fn test_pause_and_resume_flow() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
     );
 
     // Default state: not paused
@@ -2379,18 +2217,14 @@ fn test_paused_blocks_contribute() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
     );
 
     client.pause_group(&soroban_sdk::String::from_str(&env, "Pause"));
-    client.contribute(&user1, &token_admin);
+    client.contribute(&user1, &100);
 }
 
 #[test]
@@ -2413,14 +2247,10 @@ fn test_cannot_pause_already_paused() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
     );
 
     let r = soroban_sdk::String::from_str(&env, "P");
@@ -2448,244 +2278,236 @@ fn test_cannot_resume_not_paused() {
         &100,
         &token_admin,
         &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
+        &PayoutStrategy::RoundRobin,
+        &None,
+        &0,
+        &0,
     );
 
     client.resume_group(&soroban_sdk::String::from_str(&env, "R"));
 }
 
+// ============================================================
+//  PARTIAL CONTRIBUTIONS TESTS (Issue: Partial Contributions Support)
+// ============================================================
+
+/// A member can split their contribution across multiple calls and the payout
+/// fires only once the total equals contribution_amount.
 #[test]
-fn test_collective_savings_goal() {
-    let setup = setup_env();
-    let u1 = Address::generate(&setup.env);
-    let u2 = Address::generate(&setup.env);
-    let members = vec![&setup.env, u1.clone(), u2.clone()];
-    
-    // Total goal: 400 (4 contributions of 100)
-    setup.client.init(
-        &setup.admin,
-        &members,
-        &100i128,
-        &setup.token_admin,
-        &3600u64,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: Some(400i128),
-            member_goals: None,
-        },
-    );
-    
-    setup.env.ledger().set_timestamp(100);
-    setup.token_admin_client.mint(&u1, &1000);
-    setup.token_admin_client.mint(&u2, &1000);
+fn test_partial_contribution_accumulates() {
+    let env = Env::default();
+    env.mock_all_auths();
 
-    // 1st contribution (25%)
-    setup.client.contribute(&u1);
-    
-    let events = setup.env.events().all();
-    let last_event = events.last().unwrap();
-    // Milestone 25 reached
-    assert_eq!(last_event.1, vec![&setup.env, symbol_short!("milestone").into_val(&setup.env), 25u32.into_val(&setup.env)]);
-    let milestone_data_1: i128 = soroban_sdk::FromVal::from_val(&setup.env, &last_event.2);
-    assert_eq!(milestone_data_1, 100i128);
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
 
-    // 2nd contribution (50%)
-    setup.client.contribute(&u2);
-    let events = setup.env.events().all();
-    let last_event = events.last().unwrap();
-    // Milestone 50 reached
-    assert_eq!(last_event.1, vec![&setup.env, symbol_short!("milestone").into_val(&setup.env), 50u32.into_val(&setup.env)]);
-    let milestone_data_2: i128 = soroban_sdk::FromVal::from_val(&setup.env, &last_event.2);
-    assert_eq!(milestone_data_2, 200i128);
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+    let token_client = TokenClient::new(&env, &token_admin);
 
-    let (total, goal, _, _) = setup.client.get_savings_progress(&None);
-    assert_eq!(total, 200i128);
-    assert_eq!(goal, 400i128);
-}
+    let u1 = Address::generate(&env);
+    let u2 = Address::generate(&env);
+    let members = vec![&env, u1.clone(), u2.clone()];
 
-#[test]
-fn test_individual_member_goals() {
-    let setup = setup_env();
-    let u1 = Address::generate(&setup.env);
-    let members = vec![&setup.env, u1.clone()];
-    
-    let mut member_goals = Map::new(&setup.env);
-    member_goals.set(u1.clone(), 300i128);
+    token_admin_client.mint(&u1, &1000);
+    token_admin_client.mint(&u2, &1000);
 
-    setup.client.init(
-        &setup.admin,
-        &members,
-        &100i128,
-        &setup.token_admin,
-        &3600u64,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: Some(member_goals),
-        },
-    );
-    
-    setup.env.ledger().set_timestamp(100);
-    setup.token_admin_client.mint(&u1, &1000);
-
-    // Round 0
-    setup.client.contribute(&u1);
-    let (total, _, m_done, m_goal) = setup.client.get_savings_progress(&Some(u1.clone()));
-    assert_eq!(total, 100i128);
-    assert_eq!(m_done, 100i128);
-    assert_eq!(m_goal, 300i128);
-
-    // Round 1
-    setup.env.ledger().set_timestamp(4000);
-    setup.client.close_round();
-    setup.client.contribute(&u1);
-    
-    let (_, _, m_done, _) = setup.client.get_savings_progress(&Some(u1.clone()));
-    assert_eq!(m_done, 200i128);
-}
-// --- MULTI-TOKEN SUPPORT TESTS ---
-
-#[test]
-fn test_contribution_with_alternate_token() {
-    let setup = setup_env();
-    let user1 = Address::generate(&setup.env);
-    let user2 = Address::generate(&setup.env);
-    let members = vec![&setup.env, user1.clone(), user2.clone()];
-    
-    // Base token (e.g. XLM)
-    setup.client.init(
-        &setup.admin,
+    // contribution_amount = 100
+    client.init(
+        &admin,
         &members,
         &100,
-        &setup.token_admin,
+        &token_admin,
         &3600,
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
         &0,
     );
-    
-    // Create an alternate token (e.g. USDC)
-    let alt_token_admin = setup.env.register_stellar_asset_contract_v2(setup.admin.clone()).address();
-    let alt_token_client = TokenClient::new(&setup.env, &alt_token_admin);
-    let alt_token_admin_client = TokenAdminClient::new(&setup.env, &alt_token_admin);
-    
-    // Approve alternate token
-    setup.client.add_approved_token(&alt_token_admin);
-    
-    // Set exchange rate: 1 Base = 2 Alt (Rate = 0.5 relative to base)
-    // Logic: amount_to_transfer = (base_amount * 10^7) / rate
-    // rate = 2.0 -> amount = 50.
-    let rate = 2_000_000_0; // 2.0 with 10^7 precision
-    setup.client.set_exchange_rate(&alt_token_admin, &rate);
-    
-    alt_token_admin_client.mint(&user1, &1000);
-    
-    // Contribute using alt token
-    setup.client.contribute(&user1, &alt_token_admin);
-    
-    // Check balance: 1000 - 50 = 950. Round is NOT over because user2 hasn't paid.
-    assert_eq!(alt_token_client.balance(&user1), 950);
+
+    // u1: two partial payments of 40 + 60 = 100 total
+    client.contribute(&u1, &40);
+    // After first partial: NOT yet in paid_members
+    assert_eq!(client.get_member_status(&u1), false);
+    // Token balance: 1000 - 40 = 960
+    assert_eq!(token_client.balance(&u1), 960);
+
+    // Check status view
+    let (contributed, remaining) = client.get_member_contribution_status(&u1);
+    assert_eq!(contributed, 40);
+    assert_eq!(remaining, 60);
+
+    // Second partial — reaches full amount
+    client.contribute(&u1, &60);
+    // Now fully paid
+    assert_eq!(client.get_member_status(&u1), true);
+    assert_eq!(token_client.balance(&u1), 900); // 1000 - 100
+
+    // Status shows fully contributed
+    let (c2, r2) = client.get_member_contribution_status(&u1);
+    assert_eq!(c2, 100);
+    assert_eq!(r2, 0);
+
+    // u2 pays in full — triggers the payout (u1 is round-0 recipient)
+    client.contribute(&u2, &100);
+    // Payout = 200 (total pot)
+    // u1 net: 1000 - 100 (contribution) + 200 (payout) = 1100
+    assert_eq!(token_client.balance(&u1), 1100);
 }
 
+/// Payout is blocked until ALL members have reached their full contribution.
 #[test]
-fn test_token_limit_violation() {
-    let setup = setup_env();
-    let user1 = Address::generate(&setup.env);
-    let members = vec![&setup.env, user1.clone()];
-    
-    setup.client.init(
-        &setup.admin,
+fn test_payout_blocked_until_all_fully_paid() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+    let token_client = TokenClient::new(&env, &token_admin);
+
+    let u1 = Address::generate(&env);
+    let u2 = Address::generate(&env);
+    let members = vec![&env, u1.clone(), u2.clone()];
+
+    token_admin_client.mint(&u1, &1000);
+    token_admin_client.mint(&u2, &1000);
+
+    client.init(
+        &admin,
         &members,
         &100,
-        &setup.token_admin,
+        &token_admin,
         &3600,
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
         &0,
     );
-    
-    // Set limit for base token to 50 (below contribution amount of 100)
-    setup.client.set_token_limit(&setup.token_admin, &50);
-    
-    setup.token_admin_client.mint(&user1, &1000);
-    
-    let result = setup.client.try_contribute(&user1, &setup.token_admin);
-    assert!(result.is_err());
+
+    let contract_addr = client.address.clone();
+
+    // u1 pays full, u2 pays only partial (50 of 100)
+    client.contribute(&u1, &100);
+    client.contribute(&u2, &50);
+
+    // No payout yet — contract still holds 150 tokens
+    assert_eq!(token_client.balance(&contract_addr), 150);
+    // Round has not advanced
+    let (round, _, _, _, _) = client.get_state();
+    assert_eq!(round, 0);
+
+    // u2 pays the remaining 50 → payout fires
+    client.contribute(&u2, &50);
+    assert_eq!(token_client.balance(&contract_addr), 0); // pot distributed
+    let (round_after, _, _, _, _) = client.get_state();
+    assert_eq!(round_after, 1); // round advanced
 }
 
+/// `get_member_contribution_status` returns correct (contributed, remaining)
+/// values at each stage of the round.
 #[test]
-#[should_panic(expected = "Token not approved")]
-fn test_unapproved_multi_token_rejection() {
-    let setup = setup_env();
-    let user1 = Address::generate(&setup.env);
-    let members = vec![&setup.env, user1.clone()];
-    
-    setup.client.init(
-        &setup.admin,
+fn test_get_member_contribution_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+
+    let u1 = Address::generate(&env);
+    let u2 = Address::generate(&env);
+    let members = vec![&env, u1.clone(), u2.clone()];
+
+    token_admin_client.mint(&u1, &1000);
+    token_admin_client.mint(&u2, &1000);
+
+    client.init(
+        &admin,
         &members,
         &100,
-        &setup.token_admin,
+        &token_admin,
         &3600,
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
         &0,
     );
-    
-    let alt_token = Address::generate(&setup.env);
-    setup.client.contribute(&user1, &alt_token);
+
+    // Before any contribution
+    let (c0, r0) = client.get_member_contribution_status(&u1);
+    assert_eq!(c0, 0);
+    assert_eq!(r0, 100);
+
+    // After partial
+    client.contribute(&u1, &30);
+    let (c1, r1) = client.get_member_contribution_status(&u1);
+    assert_eq!(c1, 30);
+    assert_eq!(r1, 70);
+
+    // After full payment
+    client.contribute(&u1, &70);
+    let (c2, r2) = client.get_member_contribution_status(&u1);
+    assert_eq!(c2, 100);
+    assert_eq!(r2, 0);
+
+    // Complete the round (u2 pays); after reset u1's status should be cleared
+    client.contribute(&u2, &100);
+
+    // New round: status resets to (0, 100)
+    let (c3, r3) = client.get_member_contribution_status(&u1);
+    assert_eq!(c3, 0);
+    assert_eq!(r3, 100);
 }
 
+/// Sending more than remaining contribution is rejected.
 #[test]
-fn test_multi_token_payout_accumulation() {
-    let setup = setup_env();
-    let user1 = Address::generate(&setup.env);
-    let user2 = Address::generate(&setup.env);
-    let members = vec![&setup.env, user1.clone(), user2.clone()];
-    
-    setup.client.init(
-        &setup.admin,
+#[should_panic(expected = "Amount exceeds remaining contribution")]
+fn test_overpayment_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorContract, ());
+    let client = AhjoorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+
+    let u1 = Address::generate(&env);
+    let members = vec![&env, u1.clone()];
+
+    token_admin_client.mint(&u1, &1000);
+
+    client.init(
+        &admin,
         &members,
         &100,
-        &setup.token_admin,
+        &token_admin,
         &3600,
         &PayoutStrategy::RoundRobin,
         &None,
         &0,
         &0,
     );
-    
-    let alt_token_admin_addr = setup.env.register_stellar_asset_contract_v2(setup.admin.clone()).address();
-    let alt_token_admin_client = TokenAdminClient::new(&setup.env, &alt_token_admin_addr);
-    let alt_token_client = TokenClient::new(&setup.env, &alt_token_admin_addr);
-    
-    setup.client.add_approved_token(&alt_token_admin_addr);
-    setup.client.set_exchange_rate(&alt_token_admin_addr, &1_000_000_0); // 1:1 rate
-    
-    setup.token_admin_client.mint(&user1, &1000);
-    alt_token_admin_client.mint(&user2, &1000);
-    
-    // User1 contributes base token
-    setup.client.contribute(&user1, &setup.token_admin);
-    // User2 contributes alt token
-    setup.client.contribute(&user2, &alt_token_admin_addr);
-    
-    // User1 should get the payout (100 base + 100 alt)
-    assert_eq!(setup.token_client.balance(&user1), 1000); // 1000 - 100 + 100 (base)
-    assert_eq!(alt_token_client.balance(&user1), 100); // 0 + 100 (alt)
+
+    // u1 has already paid 60, tries to pay 60 more (would total 120 > 100)
+    client.contribute(&u1, &60);
+    client.contribute(&u1, &60); // should panic
 }
+
