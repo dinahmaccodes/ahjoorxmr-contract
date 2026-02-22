@@ -208,7 +208,7 @@ impl AhjoorContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
-    pub fn contribute(env: Env, contributor: Address) {
+    pub fn contribute(env: Env, contributor: Address, token: Address) {
         Self::check_not_paused(&env);
         contributor.require_auth();
 
@@ -248,24 +248,64 @@ impl AhjoorContract {
             panic!("Already contributed for this round");
         }
 
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
-        let client = token::Client::new(&env, &token_addr);
-        let amount: i128 = env
+        // Validate token
+        let approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !approved_tokens.contains(&token) {
+            panic!("Token not approved");
+        }
+
+        let base_token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let base_amount: i128 = env
             .storage()
             .instance()
             .get(&DataKey::ContributionAmt)
             .unwrap();
+
+        let amount_to_transfer = if token == base_token {
+            base_amount
+        } else {
+            let rates: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&DataKey::ExchangeRates)
+                .unwrap_or(Map::new(&env));
+            let rate = rates.get(token.clone()).expect("Exchange rate not set");
+            if rate <= 0 {
+                panic!("Invalid exchange rate");
+            }
+            // Valuation logic: RequiredAmount = (BaseAmount * 10^7) / Rate
+            // Rate is expected to be in 10^7 precision (e.g., 1.5 * 10^7 = 15,000,000)
+            (base_amount * 10_000_000) / rate
+        };
+
+        // Check token-specific limits
+        let limits: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::TokenLimits)
+            .unwrap_or(Map::new(&env));
+        if let Some(limit) = limits.get(token.clone()) {
+            if amount_to_transfer > limit {
+                panic!("Contribution exceeds token limit");
+            }
+        }
+
+        let client = token::Client::new(&env, &token);
+        client.transfer(&contributor, &env.current_contract_address(), &amount_to_transfer);
+
         let current_round: u32 = env
             .storage()
             .instance()
             .get(&DataKey::CurrentRound)
             .unwrap_or(0);
 
-        client.transfer(&contributor, &env.current_contract_address(), &amount);
-
         env.events().publish(
             (symbol_short!("contrib"), contributor.clone(), current_round),
-            amount,
+            (token, amount_to_transfer),
         );
 
         paid_members.push_back(contributor.clone());
@@ -297,7 +337,7 @@ impl AhjoorContract {
             .set(&DataKey::MemberParticipation, &member_participation);
 
         if paid_members.len() == members.len() {
-            Self::complete_round_payout(&env, &paid_members, amount, client);
+            Self::complete_round_payout(&env, &paid_members);
         }
 
         env.storage()
