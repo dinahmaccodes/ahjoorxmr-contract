@@ -182,6 +182,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MemberCollected"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "MemberContributions"
                             }
                           ]
@@ -222,6 +234,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MilestonesReached"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "PaidMembers"
                             }
                           ]
@@ -256,6 +280,54 @@
                         },
                         "val": {
                           "i128": "0"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ProposalCounter"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ProposalVotes"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Proposals"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "QuorumPercentage"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 51
                         }
                       },
                       {
@@ -346,6 +418,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "SuspendedMembers"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Token"
                             }
                           ]
@@ -358,12 +442,36 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "TotalCollected"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": "0"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "TotalParticipations"
                             }
                           ]
                         },
                         "val": {
                           "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "VotingDeadline"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": "0"
                         }
                       }
                     ]

@@ -61,6 +61,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
+                  "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                },
+                {
                   "i128": "60"
                 }
               ]
@@ -80,7 +83,7 @@
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                     },
                     {
-                      "i128": "60"
+                      "i128": "100"
                     }
                   ]
                 }
@@ -203,6 +206,22 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "ApprovedTokens"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "ClaimedRewards"
                             }
                           ]
@@ -311,6 +330,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MemberCollected"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "MemberContributions"
                             }
                           ]
@@ -360,6 +391,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "MilestonesReached"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "PaidMembers"
                             }
                           ]
@@ -394,6 +437,54 @@
                         },
                         "val": {
                           "i128": "0"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ProposalCounter"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "ProposalVotes"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Proposals"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "QuorumPercentage"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 51
                         }
                       },
                       {
@@ -484,6 +575,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "SuspendedMembers"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Token"
                             }
                           ]
@@ -496,12 +599,36 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "TotalCollected"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "i128": "0"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "TotalParticipations"
                             }
                           ]
                         },
                         "val": {
                           "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "VotingDeadline"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": "0"
                         }
                       }
                     ]
@@ -622,7 +749,7 @@
                         "symbol": "amount"
                       },
                       "val": {
-                        "i128": "60"
+                        "i128": "100"
                       }
                     },
                     {
@@ -692,7 +819,7 @@
                         "symbol": "amount"
                       },
                       "val": {
-                        "i128": "940"
+                        "i128": "900"
                       }
                     },
                     {
@@ -855,5 +982,35 @@
       ]
     ]
   },
-  "events": []
+  "events": [
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "transfer"
+              },
+              {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+              },
+              {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+              },
+              {
+                "string": "aaa:GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGO6V"
+              }
+            ],
+            "data": {
+              "i128": "100"
+            }
+          }
+        }
+      },
+      "failed_call": true
+    }
+  ]
 }

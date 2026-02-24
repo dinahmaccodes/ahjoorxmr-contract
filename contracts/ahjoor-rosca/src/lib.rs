@@ -61,6 +61,19 @@ pub struct ExitRequest {
     pub approved: bool,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemberStatus {
+    pub is_member: bool,
+    pub is_suspended: bool,
+    pub is_exited: bool,
+    pub contributions_this_round: i128,
+    pub has_paid_this_round: bool,
+    pub default_count: u32,
+    pub lifetime_contributions: i128,
+    pub claimable_rewards: i128,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
 pub enum ProposalType {
@@ -1372,14 +1385,69 @@ impl AhjoorContract {
         }
     }
 
-    pub fn get_member_status(env: Env, member: Address) -> bool {
-        let paid_members: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::PaidMembers)
-            .unwrap_or(Vec::new(&env));
-        paid_members.contains(&member)
+pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
+    let members: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Members)
+        .unwrap_or(Vec::new(&env));
+    let is_member = members.contains(&member);
+
+    let suspended_members: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::SuspendedMembers)
+        .unwrap_or(Vec::new(&env));
+    let is_suspended = suspended_members.contains(&member);
+
+    let exited_members: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::ExitedMembers)
+        .unwrap_or(Vec::new(&env));
+    let is_exited = exited_members.contains(&member);
+
+    let member_contributions: Map<Address, i128> = env
+        .storage()
+        .instance()
+        .get(&DataKey::MemberContributions)
+        .unwrap_or(Map::new(&env));
+    let contributions_this_round = member_contributions.get(member.clone()).unwrap_or(0);
+
+    let paid_members: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::PaidMembers)
+        .unwrap_or(Vec::new(&env));
+    let has_paid_this_round = paid_members.contains(&member);
+
+    let default_count_map: Map<Address, u32> = env
+        .storage()
+        .instance()
+        .get(&DataKey::DefaultCount)
+        .unwrap_or(Map::new(&env));
+    let default_count = default_count_map.get(member.clone()).unwrap_or(0);
+
+    let member_collected: Map<Address, i128> = env
+        .storage()
+        .instance()
+        .get(&DataKey::MemberCollected)
+        .unwrap_or(Map::new(&env));
+    let lifetime_contributions = member_collected.get(member.clone()).unwrap_or(0);
+
+    let claimable_rewards = Self::get_claimable_reward(env.clone(), member.clone());
+
+    MemberStatus {
+        is_member,
+        is_suspended,
+        is_exited,
+        contributions_this_round,
+        has_paid_this_round,
+        default_count,
+        lifetime_contributions,
+        claimable_rewards,
     }
+}
 
     /// Returns `(amount_contributed_so_far, amount_remaining)` for `member`
     /// in the current round.

@@ -856,8 +856,9 @@ fn test_read_interface_lifecycle() {
     client.contribute(&u1, &token_admin, &100);
 
     // Verify member status
-    assert_eq!(client.get_member_status(&u1), true);
-    assert_eq!(client.get_member_status(&u2), false);
+  assert!(client.get_member_status(&u1).has_paid_this_round);
+assert!(!client.get_member_status(&u2).has_paid_this_round);
+
 
     // Verify GroupInfo updates paid_members
     let info_mid = client.get_group_info();
@@ -920,7 +921,7 @@ fn test_member_status_resets_after_round() {
 
     // 1. u1 contributes. Round is NOT over because u2 hasn't paid.
     client.contribute(&u1, &token_admin, &100);
-    assert_eq!(client.get_member_status(&u1), true);
+    assert!(client.get_member_status(&u1).has_paid_this_round);
     assert_eq!(client.get_group_info().current_round, 0);
 
     // 2. u2 contributes. This completes Round 0 and starts Round 1.
@@ -928,8 +929,8 @@ fn test_member_status_resets_after_round() {
 
     // 3. Now verify status is reset for the new round.
     assert_eq!(client.get_group_info().current_round, 1);
-    assert_eq!(client.get_member_status(&u1), false);
-    assert_eq!(client.get_member_status(&u2), false);
+    assert!(!client.get_member_status(&u1).has_paid_this_round);
+    assert!(!client.get_member_status(&u2).has_paid_this_round);
 }
 
 // ============================================================
@@ -3073,3 +3074,156 @@ fn test_cannot_vote_twice() {
     setup.client.vote_on_proposal(&user1, &0, &false);
 }
 
+#[test]
+fn test_get_member_status_non_member() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let non_member = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone()];
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &RoscaConfig {
+            strategy: PayoutStrategy::RoundRobin,
+            custom_order: None,
+            penalty_amount: 0,
+            exit_penalty_bps: 0,
+            collective_goal: None,
+            member_goals: None,
+        },
+    );
+
+    let status = setup.client.get_member_status(&non_member);
+    assert!(!status.is_member);
+    assert!(!status.is_suspended);
+    assert!(!status.is_exited);
+    assert_eq!(status.contributions_this_round, 0);
+    assert!(!status.has_paid_this_round);
+    assert_eq!(status.default_count, 0);
+    assert_eq!(status.lifetime_contributions, 0);
+    assert_eq!(status.claimable_rewards, 0);
+}
+
+#[test]
+fn test_get_member_status_active_member() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+
+    setup.token_admin_client.mint(&u1, &1000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &RoscaConfig {
+            strategy: PayoutStrategy::RoundRobin,
+            custom_order: None,
+            penalty_amount: 0,
+            exit_penalty_bps: 0,
+            collective_goal: None,
+            member_goals: None,
+        },
+    );
+
+    // Before contributing
+    let status_before = setup.client.get_member_status(&u1);
+    assert!(status_before.is_member);
+    assert!(!status_before.is_suspended);
+    assert!(!status_before.is_exited);
+    assert!(!status_before.has_paid_this_round);
+    assert_eq!(status_before.contributions_this_round, 0);
+
+    // After contributing
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    let status_after = setup.client.get_member_status(&u1);
+    assert!(status_after.has_paid_this_round);
+    assert_eq!(status_after.contributions_this_round, 100);
+}
+
+#[test]
+fn test_get_member_status_suspended_member() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+
+    setup.token_admin_client.mint(&u1, &2000);
+    setup.token_admin_client.mint(&u2, &2000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &RoscaConfig {
+            strategy: PayoutStrategy::RoundRobin,
+            custom_order: None,
+            penalty_amount: 25,
+            exit_penalty_bps: 0,
+            collective_goal: None,
+            member_goals: None,
+        },
+    );
+
+    // u2 defaults twice to trigger suspension
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.env.ledger().set_timestamp(3601);
+    setup.client.close_round();
+    setup.client.penalise_defaulter(&u2);
+
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.env.ledger().set_timestamp(7202);
+    setup.client.close_round();
+    setup.client.penalise_defaulter(&u2);
+
+    let status = setup.client.get_member_status(&u2);
+    assert!(status.is_member);
+    assert!(status.is_suspended);
+    assert!(!status.is_exited);
+    assert_eq!(status.default_count, 2);
+}
+
+#[test]
+fn test_get_member_status_exited_member() {
+    let setup = setup_env();
+    let u1 = Address::generate(&setup.env);
+    let u2 = Address::generate(&setup.env);
+    let members = vec![&setup.env, u1.clone(), u2.clone()];
+
+    setup.token_admin_client.mint(&u1, &1000);
+    setup.token_admin_client.mint(&u2, &1000);
+
+    setup.client.init(
+        &setup.admin,
+        &members,
+        &100,
+        &setup.token_admin,
+        &3600,
+        &RoscaConfig {
+            strategy: PayoutStrategy::RoundRobin,
+            custom_order: None,
+            penalty_amount: 0,
+            exit_penalty_bps: 0,
+            collective_goal: None,
+            member_goals: None,
+        },
+    );
+
+    setup.client.request_emergency_exit(&u2);
+    setup.client.approve_exit(&u2);
+
+    let status = setup.client.get_member_status(&u2);
+    assert!(!status.is_member);   // removed from Members on approval
+    assert!(status.is_exited);
+    assert!(!status.is_suspended);
+    assert_eq!(status.default_count, 0);
+}
