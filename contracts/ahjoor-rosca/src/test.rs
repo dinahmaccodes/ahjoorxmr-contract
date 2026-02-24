@@ -2186,11 +2186,11 @@ fn test_exit_request_event_emitted() {
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "exit_requested"));
 
-    // Data should be (member, round, refund_amount)
-    let (member, round, refund_amount): (Address, u32, i128) = last.2.into_val(&env);
-    assert_eq!(member, u1);
-    assert_eq!(round, 0);
-    assert_eq!(refund_amount, 0);
+    // Data should be the struct itself
+    let event: ExitRequested = last.2.into_val(&env);
+    assert_eq!(event.member, u1);
+    assert_eq!(event.round, 0);
+    assert_eq!(event.refund_amount, 0);
 }
 
 // ---------------------------------------------------------------
@@ -2213,10 +2213,10 @@ fn test_exit_approval_event_emitted() {
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "exit_approved"));
 
-    // Data should be (member, refund_amount)
-    let (member, refund_amount): (Address, i128) = last.2.into_val(&env);
-    assert_eq!(member, u1);
-    assert_eq!(refund_amount, 0);
+    // Data should be the struct itself
+    let event: ExitApproved = last.2.into_val(&env);
+    assert_eq!(event.member, u1);
+    assert_eq!(event.refund_amount, 0);
 }
 
 // --- PAUSE AND RESUME TESTS ---
@@ -2545,15 +2545,13 @@ fn test_emit_deadline_reminder() {
     let topic0: Symbol = topics.get(0).unwrap().into_val(&setup.env);
     assert_eq!(topic0, Symbol::new(&setup.env, "deadline_reminder"));
 
-    // Data check: (round, time_remaining, non_contributors, interval)
-    let (round, time_remaining, non_contributors, interval): (u32, u64, Vec<Address>, Symbol) =
-        reminder_event.2.into_val(&setup.env);
-
-    assert_eq!(round, 0);
-    assert_eq!(time_remaining, 3500); // 3600 - 100
-    assert_eq!(non_contributors.len(), 1);
-    assert!(non_contributors.contains(&u2));
-    assert_eq!(interval, symbol_short!("24h"));
+    // Data should be the struct itself
+    let event: DeadlineReminder = reminder_event.2.into_val(&setup.env);
+    assert_eq!(event.round, 0);
+    assert_eq!(event.time_remaining, 3500); // 3600 - 100
+    assert_eq!(event.non_contributors.len(), 1);
+    assert!(event.non_contributors.contains(&u2));
+    assert_eq!(event.interval, symbol_short!("24h"));
 }
 
 #[test]
