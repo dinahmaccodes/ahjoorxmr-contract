@@ -9,15 +9,24 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, Symbol,
 };
 
+/// Shared test context for ROSCA contract tests.
 pub struct TestSetup<'a> {
     pub env: Env,
     pub client: AhjoorContractClient<'a>,
     pub admin: Address,
     pub token_admin: Address,
     pub token_client: TokenClient<'a>,
+    /// Alias for `token_admin_client`; use either field.
     pub token_admin_client: TokenAdminClient<'a>,
+    /// Pre-generated member addresses (populated by `setup_with_members`).
+    pub members: soroban_sdk::Vec<Address>,
+    /// Same underlying client as `token_admin_client`, exposed for clarity in
+    /// tests that use the members-oriented helpers.
+    pub member_token_admin: TokenAdminClient<'a>,
 }
 
+/// Minimal setup (no members, no minting). Used by tests that manage their own
+/// member list. Kept for backward compatibility with existing tests.
 fn setup_env<'a>() -> TestSetup<'a> {
     let env = Env::default();
     env.mock_all_auths();
@@ -31,6 +40,7 @@ fn setup_env<'a>() -> TestSetup<'a> {
         .address();
     let token_client = TokenClient::new(&env, &token_admin);
     let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+    let member_token_admin = TokenAdminClient::new(&env, &token_admin);
 
     TestSetup {
         env,
@@ -39,11 +49,21 @@ fn setup_env<'a>() -> TestSetup<'a> {
         token_admin,
         token_client,
         token_admin_client,
+        members: soroban_sdk::Vec::new(&Env::default()),
+        member_token_admin,
     }
 }
 
-#[test]
-fn test_rosca_flow_with_time_locks() {
+/// Creates a `TestSetup` with `n` pre-generated member addresses, each minted
+/// with `mint_amount` tokens. The returned `setup.members` is an SDK `Vec`
+/// ready to pass directly to `client.init(...)`.
+///
+/// # Example
+/// ```no_run
+/// let setup = setup_with_members(3, 1000);
+/// default_init(&setup);
+/// ```
+fn setup_with_members<'a>(n: usize, mint_amount: i128) -> TestSetup<'a> {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -56,24 +76,41 @@ fn test_rosca_flow_with_time_locks() {
         .address();
     let token_client = TokenClient::new(&env, &token_admin);
     let token_admin_client = TokenAdminClient::new(&env, &token_admin);
+    let member_token_admin = TokenAdminClient::new(&env, &token_admin);
 
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    let user3 = Address::generate(&env);
-    for u in [&user1, &user2, &user3] {
-        token_admin_client.mint(u, &1000);
+    let mut members = soroban_sdk::Vec::new(&env);
+    for _ in 0..n {
+        let addr = Address::generate(&env);
+        if mint_amount > 0 {
+            token_admin_client.mint(&addr, &mint_amount);
+        }
+        members.push_back(addr);
     }
 
-    let members = vec![&env, user1.clone(), user2.clone(), user3.clone()];
-    let duration = 3600u64;
-    let amount = 100i128;
+    TestSetup {
+        env,
+        client,
+        admin,
+        token_admin,
+        token_client,
+        token_admin_client,
+        members,
+        member_token_admin,
+    }
+}
 
-    client.init(
-        &admin,
-        &members,
-        &amount,
-        &token_admin,
-        &duration,
+/// Calls `client.init(...)` on `setup` using sensible defaults:
+/// - All addresses in `setup.members` as the member list
+/// - `contribution_amount = 100`
+/// - `round_duration = 3600` seconds
+/// - `RoscaConfig { strategy: RoundRobin, penalty_amount: 0, exit_penalty_bps: 0, … }`
+fn default_init(setup: &TestSetup<'_>) {
+    setup.client.init(
+        &setup.admin,
+        &setup.members,
+        &100,
+        &setup.token_admin,
+        &3600,
         &RoscaConfig {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
@@ -83,172 +120,82 @@ fn test_rosca_flow_with_time_locks() {
             member_goals: None,
         },
     );
+}
 
-    env.ledger().set_timestamp(100);
-    client.contribute(&user1, &token_admin, &100);
-    assert_eq!(token_client.balance(&user1), 900);
+#[test]
+fn test_rosca_flow_with_time_locks() {
+    let setup = setup_with_members(3, 1000);
+    default_init(&setup);
 
-    env.ledger().set_timestamp(3601);
-    let result = client.try_contribute(&user2, &token_admin, &100);
+    let user1 = setup.members.get(0).unwrap();
+    let user2 = setup.members.get(1).unwrap();
+
+    setup.env.ledger().set_timestamp(100);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
+    assert_eq!(setup.token_client.balance(&user1), 900);
+
+    setup.env.ledger().set_timestamp(3601);
+    let result = setup.client.try_contribute(&user2, &setup.token_admin, &100);
     assert!(result.is_err());
 
-    client.close_round();
+    setup.client.close_round();
 
-    let (round, paid, deadline, _, _) = client.get_state();
+    let (round, paid, deadline, _, _) = setup.client.get_state();
     assert_eq!(round, 1);
     assert_eq!(paid.len(), 0);
     assert_eq!(deadline, 7201);
 
-    env.ledger().set_timestamp(4000);
-    client.contribute(&user1, &token_admin, &100);
-    assert_eq!(token_client.balance(&user1), 800);
+    setup.env.ledger().set_timestamp(4000);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
+    assert_eq!(setup.token_client.balance(&user1), 800);
 }
 
 #[test]
 #[should_panic(expected = "Cannot close: Deadline has not passed yet")]
 fn test_cannot_close_early() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let setup = setup_with_members(1, 0);
+    default_init(&setup);
 
-    let admin = Address::generate(&env);
-    let members = vec![&env, Address::generate(&env)];
-
-    client.init(
-        &admin,
-        &members,
-        &100,
-        &Address::generate(&env),
-        &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
-    );
-
-    env.ledger().set_timestamp(500);
-    client.close_round();
+    setup.env.ledger().set_timestamp(500);
+    setup.client.close_round();
 }
 
 #[test]
 fn test_on_time_contribution() {
-    let env = Env::default();
-    env.mock_all_auths();
+    // setup_with_members mints 1000 to each member
+    let setup = setup_with_members(2, 1000);
+    default_init(&setup);
 
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let user1 = setup.members.get(0).unwrap();
 
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
-    let token_client = TokenClient::new(&env, &token_admin);
+    setup.env.ledger().set_timestamp(1000);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
 
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    token_admin_client.mint(&user1, &1000);
-    let members = vec![&env, user1.clone(), user2.clone()];
-
-    client.init(
-        &admin,
-        &members,
-        &100,
-        &token_admin,
-        &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
-    );
-
-    env.ledger().set_timestamp(1000);
-    client.contribute(&user1, &token_admin, &100);
-
-    assert_eq!(token_client.balance(&user1), 900);
-    let (_, paid, _, _, _) = client.get_state();
+    assert_eq!(setup.token_client.balance(&user1), 900);
+    let (_, paid, _, _, _) = setup.client.get_state();
     assert!(paid.contains(&user1));
 }
 
 #[test]
 #[should_panic(expected = "Contribution failed: Round deadline has passed")]
 fn test_late_contribution_rejection() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let setup = setup_with_members(1, 1000);
+    default_init(&setup);
 
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let user1 = Address::generate(&env);
-    let members = vec![&env, user1.clone()];
-
-    client.init(
-        &admin,
-        &members,
-        &100,
-        &token_admin,
-        &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
-    );
-
-    env.ledger().set_timestamp(3601);
-    client.contribute(&user1, &token_admin, &100);
+    let user1 = setup.members.get(0).unwrap();
+    setup.env.ledger().set_timestamp(3601);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
 }
 
 #[test]
 fn test_admin_close_round() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let setup = setup_with_members(1, 0);
+    default_init(&setup);
 
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    setup.env.ledger().set_timestamp(3601);
+    setup.client.close_round();
 
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let members = vec![&env, Address::generate(&env)];
-
-    client.init(
-        &admin,
-        &members,
-        &100,
-        &token_admin,
-        &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
-    );
-
-    env.ledger().set_timestamp(3601);
-    client.close_round();
-
-    let (round, _, _, _, _) = client.get_state();
+    let (round, _, _, _, _) = setup.client.get_state();
     assert_eq!(round, 1);
 }
 
@@ -256,32 +203,19 @@ fn test_admin_close_round() {
 
 #[test]
 fn test_admin_assigned_strategy_execution() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let setup = setup_with_members(2, 100);
 
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
-
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    let members = vec![&env, user1.clone(), user2.clone()];
+    let user1 = setup.members.get(0).unwrap();
+    let user2 = setup.members.get(1).unwrap();
 
     // Reverse the order: user2 should get paid first
-    let custom_order = vec![&env, user2.clone(), user1.clone()];
+    let custom_order = vec![&setup.env, user2.clone(), user1.clone()];
 
-    token_admin_client.mint(&user1, &100);
-    token_admin_client.mint(&user2, &100);
-
-    client.init(
-        &admin,
-        &members,
+    setup.client.init(
+        &setup.admin,
+        &setup.members,
         &100,
-        &token_admin,
+        &setup.token_admin,
         &3600,
         &RoscaConfig {
             strategy: PayoutStrategy::AdminAssigned,
@@ -293,12 +227,11 @@ fn test_admin_assigned_strategy_execution() {
         },
     );
 
-    client.contribute(&user1, &token_admin, &100);
-    client.contribute(&user2, &token_admin, &100);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
+    setup.client.contribute(&user2, &setup.token_admin, &100);
 
-    let token_client = TokenClient::new(&env, &token_admin);
     // User2 contributed 100, but was the recipient of the pot (200)
-    assert_eq!(token_client.balance(&user2), 200);
+    assert_eq!(setup.token_client.balance(&user2), 200);
 }
 
 #[test]
@@ -332,87 +265,39 @@ fn test_invalid_admin_order_validation() {
 
 #[test]
 fn test_round_robin_e2e_all_rounds() {
-    let env = Env::default();
-    env.mock_all_auths();
-    // FIX: Removed & and used register
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let setup = setup_with_members(2, 2000);
+    default_init(&setup);
 
-    let admin = Address::generate(&env);
-    // FIX: Use v2 and get the address
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
-    let token_client = TokenClient::new(&env, &token_admin);
-
-    let u1 = Address::generate(&env);
-    let u2 = Address::generate(&env);
-    let members = vec![&env, u1.clone(), u2.clone()];
-
-    // FIX: Mint 2000 to cover multiple contributions and payouts
-    for u in [&u1, &u2] {
-        token_admin_client.mint(u, &2000);
-    }
-
-    client.init(
-        &admin,
-        &members,
-        &100,
-        &token_admin,
-        &3600,
-        &RoscaConfig {
-            strategy: PayoutStrategy::RoundRobin,
-            custom_order: None,
-            penalty_amount: 0,
-            exit_penalty_bps: 0,
-            collective_goal: None,
-            member_goals: None,
-        },
-    );
+    let u1 = setup.members.get(0).unwrap();
+    let u2 = setup.members.get(1).unwrap();
 
     // ROUND 0: u1 should get the payout
-    client.contribute(&u1, &token_admin, &100);
-    client.contribute(&u2, &token_admin, &100);
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.client.contribute(&u2, &setup.token_admin, &100);
     // Math: 2000 (start) - 100 (spent) + 200 (pot) = 2100
-    assert_eq!(token_client.balance(&u1), 2100);
+    assert_eq!(setup.token_client.balance(&u1), 2100);
 
     // ROUND 1: u2 should get the payout
-    client.contribute(&u1, &token_admin, &100);
-    client.contribute(&u2, &token_admin, &100);
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.client.contribute(&u2, &setup.token_admin, &100);
     // Math: 2000 (start) - 100 (spent R0) - 100 (spent R1) + 200 (pot R1) = 2000
-    assert_eq!(token_client.balance(&u2), 2000);
+    assert_eq!(setup.token_client.balance(&u2), 2000);
 }
 
 #[test]
 fn test_admin_assigned_e2e_all_rounds() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let setup = setup_with_members(2, 2000);
 
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
-    let token_client = TokenClient::new(&env, &token_admin);
-
-    let u1 = Address::generate(&env);
-    let u2 = Address::generate(&env);
-    let members = vec![&env, u1.clone(), u2.clone()];
-
-    for u in [&u1, &u2] {
-        token_admin_client.mint(u, &2000);
-    }
+    let u1 = setup.members.get(0).unwrap();
+    let u2 = setup.members.get(1).unwrap();
 
     // Strategy: Admin Assigned (Reverse the order: u2 then u1)
-    let custom_order = vec![&env, u2.clone(), u1.clone()];
-    client.init(
-        &admin,
-        &members,
+    let custom_order = vec![&setup.env, u2.clone(), u1.clone()];
+    setup.client.init(
+        &setup.admin,
+        &setup.members,
         &100,
-        &token_admin,
+        &setup.token_admin,
         &3600,
         &RoscaConfig {
             strategy: PayoutStrategy::AdminAssigned,
@@ -425,52 +310,36 @@ fn test_admin_assigned_e2e_all_rounds() {
     );
 
     // ROUND 0: u2 should get the payout first
-    client.contribute(&u1, &token_admin, &100);
-    client.contribute(&u2, &token_admin, &100);
-    assert_eq!(token_client.balance(&u2), 2100);
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.client.contribute(&u2, &setup.token_admin, &100);
+    assert_eq!(setup.token_client.balance(&u2), 2100);
 
     // ROUND 1: u1 should get the payout second
-    client.contribute(&u1, &token_admin, &100);
-    client.contribute(&u2, &token_admin, &100);
-    assert_eq!(token_client.balance(&u1), 2000);
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.client.contribute(&u2, &setup.token_admin, &100);
+    assert_eq!(setup.token_client.balance(&u1), 2000);
 }
 
 // --- PENALTY AND DEFAULTER HANDLING TESTS ---
 
 #[test]
 fn test_single_defaulter_penalty() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let setup = setup_with_members(2, 1000);
 
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let user1 = setup.members.get(0).unwrap();
+    let user2 = setup.members.get(1).unwrap();
 
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
-    let token_client = TokenClient::new(&env, &token_admin);
-
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    let members = vec![&env, user1.clone(), user2.clone()];
-
-    // Mint tokens including penalty amount
-    token_admin_client.mint(&user1, &1000);
-    token_admin_client.mint(&user2, &1000);
-
-    let penalty_amount = 50i128;
-    client.init(
-        &admin,
-        &members,
+    // Init with a penalty amount
+    setup.client.init(
+        &setup.admin,
+        &setup.members,
         &100,
-        &token_admin,
+        &setup.token_admin,
         &3600,
         &RoscaConfig {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
-            penalty_amount: penalty_amount,
+            penalty_amount: 50,
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
@@ -478,59 +347,42 @@ fn test_single_defaulter_penalty() {
     );
 
     // Only user1 contributes
-    client.contribute(&user1, &token_admin, &100);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
 
     // Wait for deadline to pass
-    env.ledger().set_timestamp(3601);
-    client.close_round();
+    setup.env.ledger().set_timestamp(3601);
+    setup.client.close_round();
 
     // Check events after close_round
-    let events_after_close = env.events().all();
+    let events_after_close = setup.env.events().all();
     assert!(events_after_close.len() > 0, "No events after close_round");
 
-    // Admin penalizes user2 (defaulter) - this should work since user2 didn't contribute
-    client.penalise_defaulter(&user2);
+    // Admin penalizes user2 (defaulter)
+    setup.client.penalise_defaulter(&user2);
 
     // Check penalty was transferred
-    assert_eq!(token_client.balance(&user2), 950); // 1000 - 50 penalty
+    assert_eq!(setup.token_client.balance(&user2), 950); // 1000 - 50 penalty
 }
 
 #[test]
 fn test_multiple_defaulters_penalty() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let setup = setup_with_members(3, 1000);
 
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let user1 = setup.members.get(0).unwrap();
+    let user2 = setup.members.get(1).unwrap();
+    let user3 = setup.members.get(2).unwrap();
 
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
-    let token_client = TokenClient::new(&env, &token_admin);
-
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    let user3 = Address::generate(&env);
-    let members = vec![&env, user1.clone(), user2.clone(), user3.clone()];
-
-    // Mint tokens
-    for user in [&user1, &user2, &user3] {
-        token_admin_client.mint(user, &1000);
-    }
-
-    let penalty_amount = 30i128;
-    client.init(
-        &admin,
-        &members,
+    // Init with a penalty amount
+    setup.client.init(
+        &setup.admin,
+        &setup.members,
         &100,
-        &token_admin,
+        &setup.token_admin,
         &3600,
         &RoscaConfig {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
-            penalty_amount: penalty_amount,
+            penalty_amount: 30,
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
@@ -538,55 +390,39 @@ fn test_multiple_defaulters_penalty() {
     );
 
     // Only user1 contributes
-    client.contribute(&user1, &token_admin, &100);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
 
     // Wait for deadline to pass
-    env.ledger().set_timestamp(3601);
-    client.close_round();
+    setup.env.ledger().set_timestamp(3601);
+    setup.client.close_round();
 
     // Admin penalizes both defaulters
-    client.penalise_defaulter(&user2);
-    client.penalise_defaulter(&user3);
+    setup.client.penalise_defaulter(&user2);
+    setup.client.penalise_defaulter(&user3);
 
     // Check penalties were transferred
-    assert_eq!(token_client.balance(&user2), 970); // 1000 - 30 penalty
-    assert_eq!(token_client.balance(&user3), 970); // 1000 - 30 penalty
+    assert_eq!(setup.token_client.balance(&user2), 970); // 1000 - 30 penalty
+    assert_eq!(setup.token_client.balance(&user3), 970); // 1000 - 30 penalty
 }
 
 #[test]
 fn test_member_suspension_after_two_defaults() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let setup = setup_with_members(2, 2000);
 
-    let contract_id = env.register(AhjoorContract, ());
-    let client = AhjoorContractClient::new(&env, &contract_id);
+    let user1 = setup.members.get(0).unwrap();
+    let user2 = setup.members.get(1).unwrap();
 
-    let admin = Address::generate(&env);
-    let token_admin = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_admin_client = TokenAdminClient::new(&env, &token_admin);
-    let token_client = TokenClient::new(&env, &token_admin);
-
-    let user1 = Address::generate(&env);
-    let user2 = Address::generate(&env);
-    let members = vec![&env, user1.clone(), user2.clone()];
-
-    // Mint enough tokens for multiple rounds and penalties
-    token_admin_client.mint(&user1, &2000);
-    token_admin_client.mint(&user2, &2000);
-
-    let penalty_amount = 25i128;
-    client.init(
-        &admin,
-        &members,
+    // Init with penalty enabled
+    setup.client.init(
+        &setup.admin,
+        &setup.members,
         &100,
-        &token_admin,
+        &setup.token_admin,
         &3600,
         &RoscaConfig {
             strategy: PayoutStrategy::RoundRobin,
             custom_order: None,
-            penalty_amount: penalty_amount,
+            penalty_amount: 25,
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
@@ -594,21 +430,21 @@ fn test_member_suspension_after_two_defaults() {
     );
 
     // ROUND 0: user2 defaults
-    client.contribute(&user1, &token_admin, &100);
-    env.ledger().set_timestamp(3601);
-    client.close_round();
-    client.penalise_defaulter(&user2);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
+    setup.env.ledger().set_timestamp(3601);
+    setup.client.close_round();
+    setup.client.penalise_defaulter(&user2);
 
     // ROUND 1: user2 defaults again
     // After close_round, new deadline is set to current_timestamp + duration
     // So at 3601, new deadline would be 3601 + 3600 = 7201
-    client.contribute(&user1, &token_admin, &100);
-    env.ledger().set_timestamp(7202); // Past the new deadline
-    client.close_round();
-    client.penalise_defaulter(&user2);
+    setup.client.contribute(&user1, &setup.token_admin, &100);
+    setup.env.ledger().set_timestamp(7202); // Past the new deadline
+    setup.client.close_round();
+    setup.client.penalise_defaulter(&user2);
 
     // Check penalties were applied twice
-    assert_eq!(token_client.balance(&user2), 1950); // 2000 - 25 - 25
+    assert_eq!(setup.token_client.balance(&user2), 1950); // 2000 - 25 - 25
 
     // Check that user2 was suspended (we can verify this by checking the balance was penalized twice)
     // The suspension event should have been emitted, but we'll just verify the functionality works
