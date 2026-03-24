@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, panic_with_error, token, Address, Env, Map, Symbol, Vec,
+};
 
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_000;
 const INSTANCE_BUMP_AMOUNT: u32 = 120_000;
@@ -151,7 +153,11 @@ pub enum DataKey {
     MemberContributions, // Map<Address, i128>  cumulative per round
 }
 
+mod errors;
 mod events;
+mod internals;
+
+use errors::Error;
 
 #[contract]
 pub struct AhjoorContract;
@@ -168,7 +174,7 @@ impl AhjoorContract {
         config: RoscaConfig,
     ) {
         if env.storage().instance().has(&DataKey::Members) {
-            panic!("Already initialized");
+            panic_with_error!(&env, Error::AlreadyInitialized);
         }
 
         let approved_tokens: Vec<Address> = env
@@ -178,7 +184,7 @@ impl AhjoorContract {
             .unwrap_or(Vec::new(&env));
 
         if !approved_tokens.is_empty() && !approved_tokens.contains(&token) {
-            panic!("Token not approved");
+            panic_with_error!(&env, Error::TokenNotApproved);
         }
 
         let resolved_order = match config.strategy {
@@ -188,11 +194,11 @@ impl AhjoorContract {
                     .custom_order
                     .expect("AdminAssigned strategy requires a custom order");
                 if order.len() != members.len() {
-                    panic!("Custom order length mismatch");
+                    panic_with_error!(&env, Error::CustomOrderLengthMismatch);
                 }
                 for member in order.iter() {
                     if !members.contains(&member) {
-                        panic!("Custom order contains non-member address");
+                        panic_with_error!(&env, Error::CustomOrderNonMember);
                     }
                 }
                 order
@@ -333,11 +339,11 @@ impl AhjoorContract {
     }
 
     pub fn contribute(env: Env, contributor: Address, token: Address, amount: i128) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         contributor.require_auth();
 
         if amount <= 0 {
-            panic!("Contribution amount must be positive");
+            panic_with_error!(&env, Error::AmountMustBePositive);
         }
 
         let deadline: u64 = env
@@ -346,7 +352,7 @@ impl AhjoorContract {
             .get(&DataKey::RoundDeadline)
             .expect("Deadline not set");
         if env.ledger().timestamp() > deadline {
-            panic!("Contribution failed: Round deadline has passed");
+            panic_with_error!(&env, Error::RoundDeadlinePassed);
         }
 
         let exited_members: Vec<Address> = env
@@ -355,7 +361,7 @@ impl AhjoorContract {
             .get(&DataKey::ExitedMembers)
             .unwrap_or(Vec::new(&env));
         if exited_members.contains(&contributor) {
-            panic!("Member has exited");
+            panic_with_error!(&env, Error::MemberHasExited);
         }
 
         let members: Vec<Address> = env
@@ -364,7 +370,7 @@ impl AhjoorContract {
             .get(&DataKey::Members)
             .expect("Not initialized");
         if !members.contains(&contributor) {
-            panic!("Not a member");
+            panic_with_error!(&env, Error::NotAMember);
         }
 
         let mut paid_members: Vec<Address> = env
@@ -373,7 +379,7 @@ impl AhjoorContract {
             .get(&DataKey::PaidMembers)
             .expect("Not initialized");
         if paid_members.contains(&contributor) {
-            panic!("Already contributed full amount for this round");
+            panic_with_error!(&env, Error::AlreadyContributed);
         }
 
         // Validate token
@@ -383,7 +389,7 @@ impl AhjoorContract {
             .get(&DataKey::ApprovedTokens)
             .unwrap_or(Vec::new(&env));
         if !approved_tokens.contains(&token) {
-            panic!("Token not approved");
+            panic_with_error!(&env, Error::TokenNotApproved);
         }
 
         let base_token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
@@ -403,7 +409,7 @@ impl AhjoorContract {
                 .unwrap_or(Map::new(&env));
             let rate = rates.get(token.clone()).expect("Exchange rate not set");
             if rate <= 0 {
-                panic!("Invalid exchange rate");
+                panic_with_error!(&env, Error::InvalidExchangeRate);
             }
             // Valuation logic: RequiredAmount = (BaseAmount * 10^7) / Rate
             // Rate is expected to be in 10^7 precision (e.g., 1.5 * 10^7 = 15,000,000)
@@ -418,7 +424,7 @@ impl AhjoorContract {
             .unwrap_or(Map::new(&env));
         if let Some(limit) = limits.get(token.clone()) {
             if amount_to_transfer > limit {
-                panic!("Contribution exceeds token limit");
+                panic_with_error!(&env, Error::ExceedsTokenLimit);
             }
         }
 
@@ -445,7 +451,7 @@ impl AhjoorContract {
         let remaining = base_amount - already_paid;
 
         if amount > remaining {
-            panic!("Amount exceeds remaining contribution");
+            panic_with_error!(&env, Error::ExceedsRemainingContribution);
         }
 
         let new_total = already_paid + amount;
@@ -494,7 +500,7 @@ impl AhjoorContract {
 
             // Only trigger payout when all members have fully contributed
             if new_total == base_amount && paid_members.len() == members.len() {
-                Self::complete_round_payout(&env, &paid_members);
+                internals::complete_round_payout(&env, &paid_members);
             }
 
             // Savings Goal Progress Tracking
@@ -556,7 +562,7 @@ impl AhjoorContract {
     }
 
     pub fn close_round(env: Env) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -570,7 +576,7 @@ impl AhjoorContract {
             .get(&DataKey::RoundDeadline)
             .unwrap();
         if env.ledger().timestamp() <= deadline {
-            panic!("Cannot close: Deadline has not passed yet");
+            panic_with_error!(&env, Error::DeadlineNotPassed);
         }
 
         let members: Vec<Address> = env.storage().instance().get(&DataKey::Members).unwrap();
@@ -599,11 +605,11 @@ impl AhjoorContract {
             .unwrap();
         events::emit_closed(&env, current_round, defaulters);
 
-        Self::reset_round_state(&env, current_round);
+        internals::reset_round_state(&env, current_round);
     }
 
     pub fn penalise_defaulter(env: Env, member: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -617,7 +623,7 @@ impl AhjoorContract {
             .get(&DataKey::PenaltyAmount)
             .unwrap_or(0);
         if penalty_amount == 0 {
-            panic!("Penalty system is disabled");
+            panic_with_error!(&env, Error::PenaltyDisabled);
         }
 
         let defaulters: Vec<Address> = env
@@ -626,7 +632,7 @@ impl AhjoorContract {
             .get(&DataKey::Defaulters)
             .unwrap_or(Vec::new(&env));
         if !defaulters.contains(&member) {
-            panic!("Member is not a defaulter for this round");
+            panic_with_error!(&env, Error::NotADefaulter);
         }
 
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
@@ -677,7 +683,7 @@ impl AhjoorContract {
     }
 
     pub fn add_member(env: Env, new_member: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -692,7 +698,7 @@ impl AhjoorContract {
             .get(&DataKey::PaidMembers)
             .unwrap_or(Vec::new(&env));
         if !paid_members.is_empty() {
-            panic!("Cannot change members mid-round");
+            panic_with_error!(&env, Error::CannotChangeMidRound);
         }
 
         let mut members: Vec<Address> = env
@@ -701,7 +707,7 @@ impl AhjoorContract {
             .get(&DataKey::Members)
             .expect("Not initialized");
         if members.contains(&new_member) {
-            panic!("Already a member");
+            panic_with_error!(&env, Error::AlreadyAMember);
         }
         members.push_back(new_member.clone());
         env.storage().instance().set(&DataKey::Members, &members);
@@ -721,7 +727,7 @@ impl AhjoorContract {
     }
 
     pub fn remove_member(env: Env, member: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -736,7 +742,7 @@ impl AhjoorContract {
             .get(&DataKey::PaidMembers)
             .unwrap_or(Vec::new(&env));
         if !paid_members.is_empty() {
-            panic!("Cannot change members mid-round");
+            panic_with_error!(&env, Error::CannotChangeMidRound);
         }
 
         let members: Vec<Address> = env
@@ -745,7 +751,7 @@ impl AhjoorContract {
             .get(&DataKey::Members)
             .expect("Not initialized");
         if !members.contains(&member) {
-            panic!("Not a member");
+            panic_with_error!(&env, Error::NotAMember);
         }
 
         // Remove from members list
@@ -779,7 +785,7 @@ impl AhjoorContract {
     }
 
     pub fn add_approved_token(env: Env, token: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -803,7 +809,7 @@ impl AhjoorContract {
     }
 
     pub fn remove_approved_token(env: Env, token: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -832,7 +838,7 @@ impl AhjoorContract {
     }
 
     pub fn set_exchange_rate(env: Env, token: Address, rate: i128) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -854,7 +860,7 @@ impl AhjoorContract {
     }
 
     pub fn set_token_limit(env: Env, token: Address, limit: i128) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -880,7 +886,7 @@ impl AhjoorContract {
     }
 
     pub fn deposit_rewards(env: Env, depositor: Address, amount: i128) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         depositor.require_auth();
 
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
@@ -906,7 +912,7 @@ impl AhjoorContract {
         dist_type: DistributionType,
         weights: Option<Map<Address, u32>>,
     ) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -926,12 +932,12 @@ impl AhjoorContract {
     }
 
     pub fn claim_rewards(env: Env, member: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         member.require_auth();
 
         let claimable = Self::get_claimable_reward(env.clone(), member.clone());
         if claimable <= 0 {
-            panic!("No rewards to claim");
+            panic_with_error!(&env, Error::NoRewardsToClaim);
         }
 
         let mut claimed_rewards: Map<Address, i128> = env
@@ -1041,7 +1047,7 @@ impl AhjoorContract {
         voting_duration: u64,
         execution_data: Option<i128>,
     ) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         creator.require_auth();
 
         let members: Vec<Address> = env
@@ -1050,7 +1056,7 @@ impl AhjoorContract {
             .get(&DataKey::Members)
             .expect("Not initialized");
         if !members.contains(&creator) {
-            panic!("Only members can create proposals");
+            panic_with_error!(&env, Error::OnlyMembersAllowed);
         }
 
         let current_time = env.ledger().timestamp();
@@ -1117,7 +1123,7 @@ impl AhjoorContract {
     }
 
     pub fn vote_on_proposal(env: Env, voter: Address, proposal_id: u32, vote_for: bool) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         voter.require_auth();
 
         let members: Vec<Address> = env
@@ -1126,7 +1132,7 @@ impl AhjoorContract {
             .get(&DataKey::Members)
             .expect("Not initialized");
         if !members.contains(&voter) {
-            panic!("Only members can vote");
+            panic_with_error!(&env, Error::OnlyMembersAllowed);
         }
 
         let mut proposals: Map<u32, Proposal> = env
@@ -1135,16 +1141,16 @@ impl AhjoorContract {
             .get(&DataKey::Proposals)
             .unwrap_or(Map::new(&env));
         if !proposals.contains_key(proposal_id) {
-            panic!("Proposal does not exist");
+            panic_with_error!(&env, Error::ProposalNotFound);
         }
 
         let mut proposal = proposals.get(proposal_id).unwrap();
         let current_time = env.ledger().timestamp();
         if current_time > proposal.deadline {
-            panic!("Voting deadline has passed");
+            panic_with_error!(&env, Error::VotingDeadlinePassed);
         }
         if proposal.status != ProposalStatus::Pending {
-            panic!("Proposal is not pending");
+            panic_with_error!(&env, Error::ProposalNotPending);
         }
 
         let mut proposal_votes: Map<u32, Map<Address, bool>> = env
@@ -1155,7 +1161,7 @@ impl AhjoorContract {
         let mut votes = proposal_votes.get(proposal_id).unwrap_or(Map::new(&env));
 
         if votes.contains_key(voter.clone()) {
-            panic!("Member has already voted on this proposal");
+            panic_with_error!(&env, Error::AlreadyVoted);
         }
 
         votes.set(voter.clone(), vote_for);
@@ -1183,7 +1189,7 @@ impl AhjoorContract {
     }
 
     pub fn execute_proposal(env: Env, proposal_id: u32) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
 
         let members: Vec<Address> = env
             .storage()
@@ -1197,18 +1203,18 @@ impl AhjoorContract {
             .get(&DataKey::Proposals)
             .unwrap_or(Map::new(&env));
         if !proposals.contains_key(proposal_id) {
-            panic!("Proposal does not exist");
+            panic_with_error!(&env, Error::ProposalNotFound);
         }
 
         let mut proposal = proposals.get(proposal_id).unwrap();
         let current_time = env.ledger().timestamp();
 
         if proposal.status != ProposalStatus::Pending {
-            panic!("Proposal is not pending");
+            panic_with_error!(&env, Error::ProposalNotPending);
         }
 
         if current_time <= proposal.deadline {
-            panic!("Voting period has not ended");
+            panic_with_error!(&env, Error::VotingNotEnded);
         }
 
         let total_votes = proposal.votes_for + proposal.votes_against;
@@ -1256,13 +1262,13 @@ impl AhjoorContract {
 
         match proposal.proposal_type {
             ProposalType::PenaltyAppeal => {
-                Self::execute_penalty_appeal(&env, &proposal.target_member);
+                internals::execute_penalty_appeal(&env, &proposal.target_member);
             }
             ProposalType::RuleChange => {
-                Self::execute_rule_change(&env, proposal.execution_data);
+                internals::execute_rule_change(&env, proposal.execution_data);
             }
             ProposalType::MemberRemoval => {
-                Self::execute_member_removal(&env, &proposal.target_member);
+                internals::execute_member_removal(&env, &proposal.target_member);
             }
         }
 
@@ -1284,80 +1290,7 @@ impl AhjoorContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
-    fn execute_penalty_appeal(env: &Env, member: &Address) {
-        let mut default_count: Map<Address, u32> = env
-            .storage()
-            .instance()
-            .get(&DataKey::DefaultCount)
-            .unwrap_or(Map::new(env));
 
-        default_count.set(member.clone(), 0);
-        env.storage()
-            .instance()
-            .set(&DataKey::DefaultCount, &default_count);
-
-        let suspended_members: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::SuspendedMembers)
-            .unwrap_or(Vec::new(env));
-        let mut new_suspended = Vec::new(env);
-        for m in suspended_members.iter() {
-            if m != *member {
-                new_suspended.push_back(m);
-            }
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::SuspendedMembers, &new_suspended);
-
-        events::emit_appeal_ok(env, member.clone());
-    }
-
-    fn execute_rule_change(env: &Env, new_quorum: Option<i128>) {
-        if let Some(quorum) = new_quorum {
-            if quorum >= 1 && quorum <= 100 {
-                env.storage()
-                    .instance()
-                    .set(&DataKey::QuorumPercentage, &(quorum as u32));
-                events::emit_rule_upd(env, quorum);
-            }
-        }
-    }
-
-    fn execute_member_removal(env: &Env, member: &Address) {
-        let old_members: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Members)
-            .unwrap_or(Vec::new(env));
-        let mut new_members: Vec<Address> = Vec::new(env);
-        for m in old_members.iter() {
-            if m != *member {
-                new_members.push_back(m);
-            }
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::Members, &new_members);
-
-        let old_order: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::PayoutOrder)
-            .unwrap_or(Vec::new(env));
-        let mut new_order: Vec<Address> = Vec::new(env);
-        for m in old_order.iter() {
-            if m != *member {
-                new_order.push_back(m);
-            }
-        }
-        env.storage()
-            .instance()
-            .set(&DataKey::PayoutOrder, &new_order);
-
-        events::emit_mem_del(env, member.clone());
-    }
 
     // --- READ INTERFACE ---
 
@@ -1508,7 +1441,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
     }
 
     pub fn emit_deadline_reminder(env: Env, interval: Symbol) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
 
         let current_round: u32 = env
             .storage()
@@ -1697,7 +1630,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
         admin.require_auth();
 
         if Self::is_paused(env.clone()) {
-            panic!("Group is already paused");
+            panic_with_error!(&env, Error::AlreadyPaused);
         }
 
         env.storage().instance().set(&DataKey::IsPaused, &true);
@@ -1718,7 +1651,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
         admin.require_auth();
 
         if !Self::is_paused(env.clone()) {
-            panic!("Group is not paused");
+            panic_with_error!(&env, Error::NotPaused);
         }
 
         let pause_timestamp: u64 = env
@@ -1774,7 +1707,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
     }
 
     pub fn request_emergency_exit(env: Env, member: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         member.require_auth();
 
         let exited_members: Vec<Address> = env
@@ -1783,7 +1716,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .get(&DataKey::ExitedMembers)
             .unwrap_or(Vec::new(&env));
         if exited_members.contains(&member) {
-            panic!("Member already exited");
+            panic_with_error!(&env, Error::MemberAlreadyExited);
         }
 
         let members: Vec<Address> = env
@@ -1792,7 +1725,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .get(&DataKey::Members)
             .expect("Not initialized");
         if !members.contains(&member) {
-            panic!("Not a member");
+            panic_with_error!(&env, Error::NotAMember);
         }
 
         // Prevent exit mid-round
@@ -1802,7 +1735,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .get(&DataKey::PaidMembers)
             .unwrap_or(Vec::new(&env));
         if !paid_members.is_empty() {
-            panic!("Cannot request exit mid-round");
+            panic_with_error!(&env, Error::ExitNotAllowedMidRound);
         }
 
         // Check no existing pending request
@@ -1812,7 +1745,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .get(&DataKey::ExitRequests)
             .unwrap_or(Map::new(&env));
         if requests.contains_key(member.clone()) {
-            panic!("Exit request already pending");
+            panic_with_error!(&env, Error::ExitRequestPending);
         }
 
         let current_round: u32 = env
@@ -1855,7 +1788,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
     }
 
     pub fn approve_exit(env: Env, member: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -1869,7 +1802,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .get(&DataKey::ExitRequests)
             .unwrap_or(Map::new(&env));
         if !requests.contains_key(member.clone()) {
-            panic!("No exit request found for member");
+            panic_with_error!(&env, Error::NoExitRequestFound);
         }
         let request = requests.get(member.clone()).unwrap();
 
@@ -1923,7 +1856,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
     }
 
     pub fn reject_exit(env: Env, member: Address) {
-        Self::check_not_paused(&env);
+        internals::check_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -1937,7 +1870,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .get(&DataKey::ExitRequests)
             .unwrap_or(Map::new(&env));
         if !requests.contains_key(member.clone()) {
-            panic!("No exit request found for member");
+            panic_with_error!(&env, Error::NoExitRequestFound);
         }
 
         requests.remove(member.clone());
@@ -1966,129 +1899,6 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .unwrap_or(Vec::new(&env))
     }
 
-    // --- INTERNAL HELPERS ---
-
-    fn check_not_paused(env: &Env) {
-        let is_paused: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::IsPaused)
-            .unwrap_or(false);
-        if is_paused {
-            panic!("Action blocked: Group is paused");
-        }
-    }
-
-    fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
-        let current_round: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::CurrentRound)
-            .unwrap();
-        let payout_order: Vec<Address> =
-            env.storage().instance().get(&DataKey::PayoutOrder).unwrap();
-        let suspended_members: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::SuspendedMembers)
-            .unwrap_or(Vec::new(env));
-        let exited_members: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::ExitedMembers)
-            .unwrap_or(Vec::new(env));
-
-        let mut recipient_idx = (current_round % payout_order.len()) as u32;
-        let mut attempts = 0;
-        while attempts < payout_order.len() {
-            let potential_recipient = payout_order.get(recipient_idx).unwrap();
-            if !suspended_members.contains(&potential_recipient)
-                && !exited_members.contains(&potential_recipient)
-            {
-                break;
-            }
-            recipient_idx = (recipient_idx + 1) % payout_order.len();
-            attempts += 1;
-        }
-
-        if attempts >= payout_order.len() {
-            panic!("All members are suspended");
-        }
-
-        let payout_recipient = payout_order.get(recipient_idx).unwrap();
-        let reward_pool: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::RewardPool)
-            .unwrap_or(0);
-        let base_token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
-
-        let approved_tokens: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::ApprovedTokens)
-            .unwrap_or(Vec::new(env));
-
-        let mut total_payout_history_amt = 0i128;
-
-        for token_addr in approved_tokens.iter() {
-            let client = token::Client::new(env, &token_addr);
-            let mut balance = client.balance(&env.current_contract_address());
-
-            if token_addr == base_token {
-                balance -= reward_pool;
-                total_payout_history_amt = balance;
-            }
-
-            if balance > 0 {
-                client.transfer(&env.current_contract_address(), &payout_recipient, &balance);
-            }
-        }
-
-        let mut history: Vec<PayoutRecord> = env
-            .storage()
-            .instance()
-            .get(&DataKey::RoundHistory)
-            .unwrap_or(Vec::new(env));
-        history.push_back(PayoutRecord {
-            recipient: payout_recipient.clone(),
-            amount: total_payout_history_amt,
-        });
-        env.storage()
-            .instance()
-            .set(&DataKey::RoundHistory, &history);
-
-        events::emit_rd_done(
-            env,
-            current_round,
-            payout_recipient,
-            total_payout_history_amt,
-        );
-        Self::reset_round_state(env, current_round);
-    }
-
-    fn reset_round_state(env: &Env, current_round: u32) {
-        let duration: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::RoundDuration)
-            .unwrap();
-        env.storage()
-            .instance()
-            .set(&DataKey::CurrentRound, &(current_round + 1));
-        env.storage()
-            .instance()
-            .set(&DataKey::PaidMembers, &Vec::<Address>::new(env));
-        env.storage().instance().set(
-            &DataKey::MemberContributions,
-            &Map::<Address, i128>::new(env),
-        );
-        env.storage().instance().set(
-            &DataKey::RoundDeadline,
-            &(env.ledger().timestamp() + duration),
-        );
-        events::emit_reset(env, current_round);
-    }
 }
 mod test;
 pub use events::*;

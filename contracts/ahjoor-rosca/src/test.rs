@@ -151,13 +151,13 @@ fn test_rosca_flow_with_time_locks() {
 }
 
 #[test]
-#[should_panic(expected = "Cannot close: Deadline has not passed yet")]
 fn test_cannot_close_early() {
     let setup = setup_with_members(1, 0);
     default_init(&setup);
 
     setup.env.ledger().set_timestamp(500);
-    setup.client.close_round();
+    let res = setup.client.try_close_round();
+    assert_eq!(res.unwrap_err().unwrap(), Error::DeadlineNotPassed.into());
 }
 
 #[test]
@@ -177,14 +177,14 @@ fn test_on_time_contribution() {
 }
 
 #[test]
-#[should_panic(expected = "Contribution failed: Round deadline has passed")]
 fn test_late_contribution_rejection() {
     let setup = setup_with_members(1, 1000);
     default_init(&setup);
 
     let user1 = setup.members.get(0).unwrap();
     setup.env.ledger().set_timestamp(3601);
-    setup.client.contribute(&user1, &setup.token_admin, &100);
+    let res = setup.client.try_contribute(&user1, &setup.token_admin, &100);
+    assert_eq!(res.unwrap_err().unwrap(), Error::RoundDeadlinePassed.into());
 }
 
 #[test]
@@ -235,7 +235,6 @@ fn test_admin_assigned_strategy_execution() {
 }
 
 #[test]
-#[should_panic(expected = "Custom order length mismatch")]
 fn test_invalid_admin_order_validation() {
     let env = Env::default();
     env.mock_all_auths();
@@ -246,7 +245,7 @@ fn test_invalid_admin_order_validation() {
     let members = vec![&env, Address::generate(&env), Address::generate(&env)];
     let bad_order = vec![&env, Address::generate(&env)]; // Too short
 
-    client.init(
+    let res = client.try_init(
         &admin,
         &members,
         &100,
@@ -261,6 +260,7 @@ fn test_invalid_admin_order_validation() {
             member_goals: None,
         },
     );
+    assert_eq!(res.unwrap_err().unwrap(), Error::CustomOrderLengthMismatch.into());
 }
 
 #[test]
@@ -531,7 +531,6 @@ fn test_suspended_member_skipped_in_payout() {
 }
 
 #[test]
-#[should_panic(expected = "Member is not a defaulter for this round")]
 fn test_cannot_penalise_before_deadline() {
     let env = Env::default();
     env.mock_all_auths();
@@ -561,11 +560,11 @@ fn test_cannot_penalise_before_deadline() {
 
     // Try to penalise before any round is closed (no defaulters identified yet)
     env.ledger().set_timestamp(1000);
-    client.penalise_defaulter(&user1);
+    let res = client.try_penalise_defaulter(&user1);
+    assert_eq!(res.unwrap_err().unwrap(), Error::NotADefaulter.into());
 }
 
 #[test]
-#[should_panic(expected = "Penalty system is disabled")]
 fn test_penalty_disabled_when_amount_zero() {
     let env = Env::default();
     env.mock_all_auths();
@@ -595,11 +594,11 @@ fn test_penalty_disabled_when_amount_zero() {
 
     env.ledger().set_timestamp(3601);
     client.close_round();
-    client.penalise_defaulter(&user1);
+    let res = client.try_penalise_defaulter(&user1);
+    assert_eq!(res.unwrap_err().unwrap(), Error::PenaltyDisabled.into());
 }
 
 #[test]
-#[should_panic(expected = "Member is not a defaulter for this round")]
 fn test_cannot_penalise_non_defaulter() {
     let env = Env::default();
     env.mock_all_auths();
@@ -641,7 +640,8 @@ fn test_cannot_penalise_non_defaulter() {
     client.contribute(&user2, &token_admin, &100);
 
     // Try to penalise user1 who contributed
-    client.penalise_defaulter(&user1);
+    let res = client.try_penalise_defaulter(&user1);
+    assert_eq!(res.unwrap_err().unwrap(), Error::NotADefaulter.into());
 }
 
 #[test]
@@ -823,7 +823,6 @@ fn test_add_member_before_round() {
 }
 
 #[test]
-#[should_panic(expected = "Cannot change members mid-round")]
 fn test_add_member_mid_round_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -864,7 +863,8 @@ fn test_add_member_mid_round_panics() {
     client.contribute(&u1, &token_admin, &100);
 
     // Attempt to add a member mid-round — must panic
-    client.add_member(&new_member);
+    let res = client.try_add_member(&new_member);
+    assert_eq!(res.unwrap_err().unwrap(), Error::CannotChangeMidRound.into());
 }
 
 #[test]
@@ -923,7 +923,6 @@ fn test_remove_member_between_rounds() {
 }
 
 #[test]
-#[should_panic(expected = "Cannot change members mid-round")]
 fn test_remove_member_mid_round_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -963,7 +962,8 @@ fn test_remove_member_mid_round_panics() {
     client.contribute(&u1, &token_admin, &100);
 
     // Attempt to remove a member mid-round — must panic
-    client.remove_member(&u2);
+    let res = client.try_remove_member(&u2);
+    assert_eq!(res.unwrap_err().unwrap(), Error::CannotChangeMidRound.into());
 }
 
 #[test]
@@ -1103,7 +1103,6 @@ fn test_init_with_approved_token() {
 }
 
 #[test]
-#[should_panic(expected = "Token not approved")]
 fn test_init_with_unapproved_token_panics() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
@@ -1123,7 +1122,7 @@ fn test_init_with_unapproved_token_panics() {
     setup.client.add_approved_token(&other_token);
 
     // Should fail because token_admin is not in the whitelist
-    setup.client.init(
+    let res = setup.client.try_init(
         &setup.admin,
         &members,
         &100,
@@ -1138,12 +1137,12 @@ fn test_init_with_unapproved_token_panics() {
             member_goals: None,
         },
     );
+    assert_eq!(res.unwrap_err().unwrap(), Error::TokenNotApproved.into());
 }
 
 // --- NEW EDGE CASE AND FAILURE PATH TESTS (Issue #9) ---
 
 #[test]
-#[should_panic(expected = "Already initialized")]
 fn test_init_twice_panics() {
     let setup = setup_env();
     let members = vec![
@@ -1170,7 +1169,7 @@ fn test_init_twice_panics() {
     );
 
     // Second init should panic
-    setup.client.init(
+    let res = setup.client.try_init(
         &setup.admin,
         &members,
         &100,
@@ -1185,10 +1184,10 @@ fn test_init_twice_panics() {
             member_goals: None,
         },
     );
+    assert_eq!(res.unwrap_err().unwrap(), Error::AlreadyInitialized.into());
 }
 
 #[test]
-#[should_panic(expected = "Not a member")]
 fn test_contribute_non_member_panics() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
@@ -1213,13 +1212,13 @@ fn test_contribute_non_member_panics() {
     );
 
     // Non-member trying to contribute
-    setup
+    let res = setup
         .client
-        .contribute(&non_member, &setup.token_admin, &100);
+        .try_contribute(&non_member, &setup.token_admin, &100);
+    assert_eq!(res.unwrap_err().unwrap(), Error::NotAMember.into());
 }
 
 #[test]
-#[should_panic(expected = "Already contributed full amount for this round")]
 fn test_contribute_twice_panics() {
     let setup = setup_env();
     let u1 = Address::generate(&setup.env);
@@ -1248,7 +1247,8 @@ fn test_contribute_twice_panics() {
     setup.client.contribute(&u1, &setup.token_admin, &100);
 
     // Second contribution by the same member in the same round should panic
-    setup.client.contribute(&u1, &setup.token_admin, &100);
+    let res = setup.client.try_contribute(&u1, &setup.token_admin, &100);
+    assert_eq!(res.unwrap_err().unwrap(), Error::AlreadyContributed.into());
 }
 
 #[test]
@@ -1426,7 +1426,7 @@ fn test_large_group_rosca() {
     );
 
     // Do 1 full cycle (10 rounds)
-    for round_idx in 0..10 {
+    for _round_idx in 0..10 {
         for m in member_addresses.iter() {
             setup.client.contribute(m, &setup.token_admin, &100);
         }
@@ -1643,7 +1643,7 @@ fn test_contribution_pot_separation() {
     setup.client.deposit_rewards(&setup.admin, &500);
 
     // Complete a round
-    let u1_balance_before = setup.token_client.balance(&u1);
+    let _u1_balance_before = setup.token_client.balance(&u1);
     setup.client.contribute(&u1, &setup.token_admin, &100);
     setup.client.contribute(&u2, &setup.token_admin, &100);
 
@@ -1743,20 +1743,19 @@ fn test_member_can_request_emergency_exit() {
 // 2. Non-member cannot request an exit
 // ---------------------------------------------------------------
 #[test]
-#[should_panic(expected = "Not a member")]
 fn test_exit_request_rejected_if_not_member() {
     let env = Env::default();
     let (client, _admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
 
     let non_member = Address::generate(&env);
-    client.request_emergency_exit(&non_member);
+    let res = client.try_request_emergency_exit(&non_member);
+    assert_eq!(res.unwrap_err().unwrap(), Error::NotAMember.into());
 }
 
 // ---------------------------------------------------------------
 // 3. Already-exited member cannot request again
 // ---------------------------------------------------------------
 #[test]
-#[should_panic(expected = "Member already exited")]
 fn test_exit_request_rejected_if_already_exited() {
     let env = Env::default();
     let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
@@ -1765,14 +1764,14 @@ fn test_exit_request_rejected_if_already_exited() {
     client.approve_exit(&u1);
 
     // Now u1 is in ExitedMembers, requesting again should panic
-    client.request_emergency_exit(&u1);
+    let res = client.try_request_emergency_exit(&u1);
+    assert_eq!(res.unwrap_err().unwrap(), Error::MemberAlreadyExited.into());
 }
 
 // ---------------------------------------------------------------
 // 4. Cannot request exit mid-round (after at least one contribution)
 // ---------------------------------------------------------------
 #[test]
-#[should_panic(expected = "Cannot request exit mid-round")]
 fn test_exit_request_rejected_mid_round() {
     let env = Env::default();
     let (client, _admin, u1, u2, _u3, _tc, _ta) = setup_exit_env(&env);
@@ -1781,7 +1780,8 @@ fn test_exit_request_rejected_mid_round() {
     client.contribute(&u2, &_ta, &100);
 
     // u1 tries to exit mid-round → should panic
-    client.request_emergency_exit(&u1);
+    let res = client.try_request_emergency_exit(&u1);
+    assert_eq!(res.unwrap_err().unwrap(), Error::ExitNotAllowedMidRound.into());
 }
 
 // ---------------------------------------------------------------
@@ -1871,7 +1871,6 @@ fn test_admin_rejects_exit_request() {
 // 7. Exited member cannot contribute
 // ---------------------------------------------------------------
 #[test]
-#[should_panic(expected = "Member has exited")]
 fn test_exited_member_cannot_contribute() {
     let env = Env::default();
     let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
@@ -1880,7 +1879,8 @@ fn test_exited_member_cannot_contribute() {
     client.approve_exit(&u1);
 
     // u1 tries to contribute after exit — must panic
-    client.contribute(&u1, &_ta, &100);
+    let res = client.try_contribute(&u1, &_ta, &100);
+    assert_eq!(res.unwrap_err().unwrap(), Error::MemberHasExited.into());
 }
 
 // ---------------------------------------------------------------
@@ -1918,7 +1918,7 @@ fn test_exited_member_skipped_in_payout_order() {
 #[test]
 fn test_exited_member_skipped_in_defaulters_list() {
     let env = Env::default();
-    let (client, _admin, u1, u2, u3, _tc, _ta) = setup_exit_env(&env);
+    let (client, _admin, u1, u2, _u3, _tc, _ta) = setup_exit_env(&env);
 
     // u1 exits before the first round deadline
     client.request_emergency_exit(&u1);
@@ -2134,7 +2134,6 @@ fn test_pause_and_resume_flow() {
 }
 
 #[test]
-#[should_panic(expected = "Action blocked: Group is paused")]
 fn test_paused_blocks_contribute() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2166,11 +2165,11 @@ fn test_paused_blocks_contribute() {
     );
 
     client.pause_group(&soroban_sdk::String::from_str(&env, "Pause"));
-    client.contribute(&user1, &token_admin, &100);
+    let res = client.try_contribute(&user1, &token_admin, &100);
+    assert_eq!(res.unwrap_err().unwrap(), Error::ContractPaused.into());
 }
 
 #[test]
-#[should_panic(expected = "Group is already paused")]
 fn test_cannot_pause_already_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2201,11 +2200,11 @@ fn test_cannot_pause_already_paused() {
 
     let r = soroban_sdk::String::from_str(&env, "P");
     client.pause_group(&r);
-    client.pause_group(&r);
+    let res = client.try_pause_group(&r);
+    assert_eq!(res.unwrap_err().unwrap(), Error::AlreadyPaused.into());
 }
 
 #[test]
-#[should_panic(expected = "Group is not paused")]
 fn test_cannot_resume_not_paused() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2234,7 +2233,8 @@ fn test_cannot_resume_not_paused() {
         },
     );
 
-    client.resume_group(&soroban_sdk::String::from_str(&env, "R"));
+    let res = client.try_resume_group(&soroban_sdk::String::from_str(&env, "R"));
+    assert_eq!(res.unwrap_err().unwrap(), Error::NotPaused.into());
 }
 
 // ============================================================
@@ -2313,7 +2313,6 @@ fn test_get_member_contribution_status() {
 
 /// Sending more than remaining contribution is rejected.
 #[test]
-#[should_panic(expected = "Amount exceeds remaining contribution")]
 fn test_overpayment_rejected() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2350,7 +2349,8 @@ fn test_overpayment_rejected() {
 
     // u1 has already paid 60, tries to pay 60 more (would total 120 > 100)
     client.contribute(&u1, &token_admin, &60);
-    client.contribute(&u1, &token_admin, &60); // should panic
+    let res = client.try_contribute(&u1, &token_admin, &60); // should error
+    assert_eq!(res.unwrap_err().unwrap(), Error::ExceedsRemainingContribution.into());
 }
 
 #[test]
@@ -2817,7 +2817,6 @@ fn test_member_removal_execution() {
 }
 
 #[test]
-#[should_panic(expected = "Only members can create proposals")]
 fn test_non_member_cannot_create_proposal() {
     let setup = setup_env();
     let user1 = Address::generate(&setup.env);
@@ -2847,7 +2846,7 @@ fn test_non_member_cannot_create_proposal() {
     );
 
     let description = soroban_sdk::String::from_str(&setup.env, "Unauthorized proposal");
-    setup.client.create_proposal(
+    let res = setup.client.try_create_proposal(
         &non_member,
         &ProposalType::MemberRemoval,
         &description,
@@ -2855,10 +2854,10 @@ fn test_non_member_cannot_create_proposal() {
         &3600,
         &None,
     );
+    assert_eq!(res.unwrap_err().unwrap(), Error::OnlyMembersAllowed.into());
 }
 
 #[test]
-#[should_panic(expected = "Voting deadline has passed")]
 fn test_cannot_vote_after_deadline() {
     let setup = setup_env();
     let user1 = Address::generate(&setup.env);
@@ -2899,11 +2898,11 @@ fn test_cannot_vote_after_deadline() {
 
     // Deadline is at 100 + 3600 = 3700, try to vote at 3701
     setup.env.ledger().set_timestamp(3701);
-    setup.client.vote_on_proposal(&user1, &0, &true);
+    let res = setup.client.try_vote_on_proposal(&user1, &0, &true);
+    assert_eq!(res.unwrap_err().unwrap(), Error::VotingDeadlinePassed.into());
 }
 
 #[test]
-#[should_panic(expected = "Member has already voted on this proposal")]
 fn test_cannot_vote_twice() {
     let setup = setup_env();
     let user1 = Address::generate(&setup.env);
@@ -2942,7 +2941,8 @@ fn test_cannot_vote_twice() {
     );
 
     setup.client.vote_on_proposal(&user1, &0, &true);
-    setup.client.vote_on_proposal(&user1, &0, &false);
+    let res = setup.client.try_vote_on_proposal(&user1, &0, &false);
+    assert_eq!(res.unwrap_err().unwrap(), Error::AlreadyVoted.into());
 }
 
 #[test]
