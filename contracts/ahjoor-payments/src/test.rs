@@ -88,15 +88,10 @@ fn test_create_single_payment_escrow() {
     );
 
     assert_eq!(payment_id, 0);
-    // Funds are in escrow (contract), not with merchant
     assert_eq!(s.token_client.balance(&customer), 750);
     assert_eq!(s.token_client.balance(&merchant), 0);
-    assert_eq!(
-        s.token_client.balance(&s.client.address),
-        250
-    );
+    assert_eq!(s.token_client.balance(&s.client.address), 250);
 
-    // Payment is Pending
     let payment = s.client.get_payment(&payment_id);
     assert_eq!(payment.status, PaymentStatus::Pending);
     assert_eq!(payment.amount, 250);
@@ -113,11 +108,8 @@ fn test_complete_payment_releases_to_merchant() {
     s.token_admin_client.mint(&customer, &1000);
 
     let payment_id = s.client.create_payment(&customer, &merchant, &250, &s.token_addr);
-
-    // Admin completes the payment
     s.client.complete_payment(&payment_id);
 
-    // Funds released to merchant
     assert_eq!(s.token_client.balance(&merchant), 250);
     assert_eq!(s.token_client.balance(&s.client.address), 0);
 
@@ -137,7 +129,7 @@ fn test_complete_already_completed_panics() {
 
     let payment_id = s.client.create_payment(&customer, &merchant, &100, &s.token_addr);
     s.client.complete_payment(&payment_id);
-    s.client.complete_payment(&payment_id); // Should panic
+    s.client.complete_payment(&payment_id);
 }
 
 #[test]
@@ -182,13 +174,11 @@ fn test_create_batch_payments_escrow() {
     let ids = s.client.create_payments_batch(&customer, &requests);
 
     assert_eq!(ids.len(), 2);
-    // All funds in escrow
     assert_eq!(s.token_client.balance(&customer), 4700);
     assert_eq!(s.token_client.balance(&merchant1), 0);
     assert_eq!(s.token_client.balance(&merchant2), 0);
     assert_eq!(s.token_client.balance(&s.client.address), 300);
 
-    // Both payments are Pending
     let p0 = s.client.get_payment(&ids.get(0).unwrap());
     let p1 = s.client.get_payment(&ids.get(1).unwrap());
     assert_eq!(p0.status, PaymentStatus::Pending);
@@ -233,7 +223,6 @@ fn test_batch_insufficient_funds_reverts_all() {
     let result = s.client.try_create_payments_batch(&customer, &requests);
     assert!(result.is_err());
 
-    // Atomicity: balances unchanged
     assert_eq!(s.token_client.balance(&customer), 150);
     assert_eq!(s.client.get_payment_counter(), 0);
 }
@@ -256,17 +245,14 @@ fn test_dispute_pending_payment() {
     let reason = String::from_str(&s.env, "Wrong item delivered");
     s.client.dispute_payment(&customer, &payment_id, &reason);
 
-    // Payment is now Disputed
     let payment = s.client.get_payment(&payment_id);
     assert_eq!(payment.status, PaymentStatus::Disputed);
     assert!(s.client.is_disputed(&payment_id));
 
-    // Dispute record exists
     let dispute = s.client.get_dispute(&payment_id);
     assert_eq!(dispute.payment_id, payment_id);
     assert!(!dispute.resolved);
 
-    // Funds still in escrow
     assert_eq!(s.token_client.balance(&s.client.address), 500);
 }
 
@@ -338,7 +324,6 @@ fn test_complete_disputed_payment_panics() {
     let reason = String::from_str(&s.env, "Dispute this");
     s.client.dispute_payment(&customer, &payment_id, &reason);
 
-    // Cannot complete a disputed payment
     s.client.complete_payment(&payment_id);
 }
 
@@ -360,7 +345,6 @@ fn test_resolve_dispute_to_merchant() {
     let reason = String::from_str(&s.env, "Quality issue");
     s.client.dispute_payment(&customer, &payment_id, &reason);
 
-    // Admin resolves in favor of merchant
     s.client.resolve_dispute(&payment_id, &true);
 
     let payment = s.client.get_payment(&payment_id);
@@ -387,12 +371,11 @@ fn test_resolve_dispute_to_customer() {
     let reason = String::from_str(&s.env, "Never received item");
     s.client.dispute_payment(&customer, &payment_id, &reason);
 
-    // Admin resolves in favor of customer (refund)
     s.client.resolve_dispute(&payment_id, &false);
 
     let payment = s.client.get_payment(&payment_id);
     assert_eq!(payment.status, PaymentStatus::Refunded);
-    assert_eq!(s.token_client.balance(&customer), 1000); // Full refund
+    assert_eq!(s.token_client.balance(&customer), 1000);
     assert_eq!(s.token_client.balance(&merchant), 0);
     assert_eq!(s.token_client.balance(&s.client.address), 0);
 
@@ -411,8 +394,6 @@ fn test_resolve_non_disputed_panics() {
     s.token_admin_client.mint(&customer, &1000);
 
     let payment_id = s.client.create_payment(&customer, &merchant, &100, &s.token_addr);
-
-    // Try to resolve a non-disputed payment
     s.client.resolve_dispute(&payment_id, &true);
 }
 
@@ -436,15 +417,12 @@ fn test_dispute_escalation_after_timeout() {
     let reason = String::from_str(&s.env, "Test dispute");
     s.client.dispute_payment(&customer, &payment_id, &reason);
 
-    // Set a short timeout for testing
-    s.client.set_dispute_timeout(&3600); // 1 hour
+    s.client.set_dispute_timeout(&3600);
 
-    // Before timeout
     s.env.ledger().set_timestamp(3000);
     let escalated = s.client.check_escalation(&payment_id);
     assert!(!escalated);
 
-    // After timeout (dispute created at 2000, timeout = 3600 → escalate after 5601)
     s.env.ledger().set_timestamp(6000);
     let escalated = s.client.check_escalation(&payment_id);
     assert!(escalated);
@@ -481,7 +459,6 @@ fn test_no_escalation_after_resolved() {
     s.client.dispute_payment(&customer, &payment_id, &reason);
     s.client.resolve_dispute(&payment_id, &true);
 
-    // Even after timeout, resolved disputes don't escalate
     s.env.ledger().set_timestamp(1_000_000);
     let escalated = s.client.check_escalation(&payment_id);
     assert!(!escalated);
@@ -498,7 +475,7 @@ fn test_set_dispute_timeout() {
 
     assert_eq!(s.client.get_dispute_timeout(), 7 * 24 * 60 * 60);
 
-    s.client.set_dispute_timeout(&86400); // 1 day
+    s.client.set_dispute_timeout(&86400);
     assert_eq!(s.client.get_dispute_timeout(), 86400);
 }
 
@@ -551,10 +528,8 @@ fn test_customer_payment_tracking() {
     let customer = Address::generate(&s.env);
     s.token_admin_client.mint(&customer, &10000);
 
-    // Single payment
     s.client.create_payment(&customer, &Address::generate(&s.env), &100, &s.token_addr);
 
-    // Batch payment
     let requests = vec![
         &s.env,
         PaymentRequest { merchant: Address::generate(&s.env), amount: 200, token: s.token_addr.clone() },
@@ -588,32 +563,27 @@ fn test_full_dispute_lifecycle() {
     let merchant = Address::generate(&s.env);
     s.token_admin_client.mint(&customer, &1000);
 
-    // 1. Create payment (escrow)
     s.env.ledger().set_timestamp(100);
     let pid = s.client.create_payment(&customer, &merchant, &500, &s.token_addr);
     assert_eq!(s.client.get_payment(&pid).status, PaymentStatus::Pending);
     assert_eq!(s.token_client.balance(&s.client.address), 500);
 
-    // 2. Customer disputes
     s.env.ledger().set_timestamp(200);
     let reason = String::from_str(&s.env, "Defective product");
     s.client.dispute_payment(&customer, &pid, &reason);
     assert_eq!(s.client.get_payment(&pid).status, PaymentStatus::Disputed);
     assert!(s.client.is_disputed(&pid));
 
-    // 3. Check escalation (not yet)
     s.client.set_dispute_timeout(&1000);
     s.env.ledger().set_timestamp(500);
     assert!(!s.client.check_escalation(&pid));
 
-    // 4. Escalation fires after timeout
     s.env.ledger().set_timestamp(1500);
     assert!(s.client.check_escalation(&pid));
 
-    // 5. Admin resolves → refund
     s.client.resolve_dispute(&pid, &false);
     assert_eq!(s.client.get_payment(&pid).status, PaymentStatus::Refunded);
-    assert_eq!(s.token_client.balance(&customer), 1000); // fully refunded
+    assert_eq!(s.token_client.balance(&customer), 1000);
     assert_eq!(s.token_client.balance(&merchant), 0);
     assert_eq!(s.token_client.balance(&s.client.address), 0);
     assert!(!s.client.is_disputed(&pid));
@@ -661,4 +631,105 @@ fn test_resolve_emits_events() {
 
     let events = s.env.events().all();
     assert!(events.len() >= 3, "Expected multiple events for full dispute lifecycle");
+}
+
+// ===========================================================================
+//  TTL Extension Behavior Tests
+// ===========================================================================
+
+/// Verify that a Payment record stored in persistent storage survives
+/// well beyond the instance TTL threshold by checking it remains accessible
+/// after advancing the ledger sequence past INSTANCE_LIFETIME_THRESHOLD.
+#[test]
+fn test_payment_persistent_ttl_extended_on_create() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payment_id = s.client.create_payment(&customer, &merchant, &100, &s.token_addr);
+
+    // Advance ledger sequence past instance TTL threshold
+    s.env.ledger().set_sequence_number(
+        s.env.ledger().sequence() + 110_000,
+    );
+
+    // Payment record must still be accessible (persistent storage, individual TTL)
+    let payment = s.client.get_payment(&payment_id);
+    assert_eq!(payment.id, payment_id);
+    assert_eq!(payment.status, PaymentStatus::Pending);
+}
+
+/// Verify that completing a payment extends its persistent TTL so the
+/// completed record remains accessible for auditing.
+#[test]
+fn test_payment_persistent_ttl_extended_on_complete() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payment_id = s.client.create_payment(&customer, &merchant, &100, &s.token_addr);
+    s.client.complete_payment(&payment_id);
+
+    s.env.ledger().set_sequence_number(
+        s.env.ledger().sequence() + 110_000,
+    );
+
+    let payment = s.client.get_payment(&payment_id);
+    assert_eq!(payment.status, PaymentStatus::Completed);
+}
+
+/// Verify that a Dispute record in temporary storage is accessible immediately
+/// after creation and that the resolved flag is updated correctly.
+#[test]
+fn test_dispute_temporary_storage_lifecycle() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payment_id = s.client.create_payment(&customer, &merchant, &200, &s.token_addr);
+
+    let reason = String::from_str(&s.env, "Item not received");
+    s.client.dispute_payment(&customer, &payment_id, &reason);
+
+    // Dispute is in temporary storage and accessible
+    let dispute = s.client.get_dispute(&payment_id);
+    assert!(!dispute.resolved);
+    assert_eq!(dispute.payment_id, payment_id);
+
+    // Resolve — dispute record updated in temporary storage
+    s.client.resolve_dispute(&payment_id, &false);
+    let resolved_dispute = s.client.get_dispute(&payment_id);
+    assert!(resolved_dispute.resolved);
+}
+
+/// Verify that CustomerPayments index in persistent storage accumulates
+/// correctly across multiple payments and survives ledger advancement.
+#[test]
+fn test_customer_payments_persistent_ttl() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &5000);
+
+    s.client.create_payment(&customer, &Address::generate(&s.env), &100, &s.token_addr);
+    s.client.create_payment(&customer, &Address::generate(&s.env), &100, &s.token_addr);
+    s.client.create_payment(&customer, &Address::generate(&s.env), &100, &s.token_addr);
+
+    s.env.ledger().set_sequence_number(
+        s.env.ledger().sequence() + 110_000,
+    );
+
+    // Customer index must still be accessible after ledger advancement
+    let ids = s.client.get_customer_payments(&customer);
+    assert_eq!(ids.len(), 3);
 }

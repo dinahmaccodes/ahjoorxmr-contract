@@ -3,8 +3,19 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, token, Address, Env, Map, Symbol, Vec,
 };
 
+// Instance storage: config, counters, and active round state (bounded, shared TTL)
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_000;
 const INSTANCE_BUMP_AMOUNT: u32 = 120_000;
+
+// Persistent storage: RoundHistory (grows by one record per round — unbounded)
+// Each write extends its own TTL independently of the instance.
+const PERSISTENT_LIFETIME_THRESHOLD: u32 = 100_000;
+const PERSISTENT_BUMP_AMOUNT: u32 = 120_000;
+
+// Temporary storage: ExitRequests (in-progress, pending admin approval — short-lived)
+// Auto-expires if not acted upon; no long-term retention needed.
+const TEMP_LIFETIME_THRESHOLD: u32 = 10_000;
+const TEMP_BUMP_AMOUNT: u32 = 15_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -107,9 +118,28 @@ pub struct Proposal {
     pub execution_data: Option<i128>,
 }
 
+/// Storage key classification:
+///
+/// INSTANCE (config + active round state — bounded, shared TTL):
+///   Admin, Members, PayoutOrder, Strategy, ContributionAmt, Token,
+///   CurrentRound, PaidMembers, RoundDuration, RoundDeadline, Defaulters,
+///   PenaltyAmount, DefaultCount, SuspendedMembers, ApprovedTokens,
+///   RewardPool, TotalParticipations, MemberParticipation, ClaimedRewards,
+///   RewardWeights, RewardDistType, ExitedMembers, ExitPenaltyBps,
+///   IsPaused, PauseReason, PauseTimestamp, CollectiveGoal, TotalCollected,
+///   MemberGoals, MemberCollected, MilestonesReached, ExchangeRates,
+///   TokenLimits, ProposalCounter, Proposals, ProposalVotes,
+///   VotingDeadline, QuorumPercentage, MemberContributions
+///
+/// PERSISTENT (unbounded growth — individual TTL per key):
+///   RoundHistory — appended every round; must outlive instance TTL
+///
+/// TEMPORARY (short-lived in-progress state — auto-expires):
+///   ExitRequests — pending admin approval; no long-term retention needed
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
+    // --- Instance ---
     Admin,               // Address
     Members,             // Vec<Address>
     PayoutOrder,         // Vec<Address>
@@ -124,7 +154,6 @@ pub enum DataKey {
     PenaltyAmount,       // i128
     DefaultCount,        // Map<Address, u32>
     SuspendedMembers,    // Vec<Address>
-    RoundHistory,        // Vec<PayoutRecord>
     ApprovedTokens,      // Vec<Address>
     RewardPool,          // i128
     TotalParticipations, // u32
@@ -132,7 +161,6 @@ pub enum DataKey {
     ClaimedRewards,      // Map<Address, i128>
     RewardWeights,       // Map<Address, u32>
     RewardDistType,      // DistributionType
-    ExitRequests,        // Map<Address, ExitRequest>
     ExitedMembers,       // Vec<Address>
     ExitPenaltyBps,      // u32 (basis points, e.g. 1000 = 10%)
     IsPaused,            // bool
@@ -147,10 +175,14 @@ pub enum DataKey {
     TokenLimits,         // Map<Address, i128>
     ProposalCounter,     // u32
     Proposals,           // Map<u32, Proposal>
-    ProposalVotes, // Map<u32, Map<Address, bool>> (proposal_id -> member_address -> has_voted)
-    VotingDeadline, // u64
-    QuorumPercentage, // u32 (e.g., 51 for 51%)
-    MemberContributions, // Map<Address, i128>  cumulative per round
+    ProposalVotes,       // Map<u32, Map<Address, bool>>
+    VotingDeadline,      // u64
+    QuorumPercentage,    // u32 (e.g., 51 for 51%)
+    MemberContributions, // Map<Address, i128> cumulative per round
+    // --- Persistent ---
+    RoundHistory,        // Vec<PayoutRecord> — grows every round
+    // --- Temporary ---
+    ExitRequests,        // Map<Address, ExitRequest> — pending admin action
 }
 
 mod errors;
@@ -257,9 +289,15 @@ impl AhjoorContract {
         env.storage()
             .instance()
             .set(&DataKey::SuspendedMembers, &Vec::<Address>::new(&env));
+        // Persistent: RoundHistory grows by one record per round — must not share instance TTL
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::RoundHistory, &Vec::<PayoutRecord>::new(&env));
+        env.storage().persistent().extend_ttl(
+            &DataKey::RoundHistory,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
         env.storage().instance().set(&DataKey::RewardPool, &0i128);
         env.storage()
             .instance()
@@ -281,9 +319,15 @@ impl AhjoorContract {
         env.storage()
             .instance()
             .set(&DataKey::ExitPenaltyBps, &config.exit_penalty_bps);
-        env.storage().instance().set(
+        // Temporary: ExitRequests are short-lived pending-admin state — auto-expire when unused
+        env.storage().temporary().set(
             &DataKey::ExitRequests,
             &Map::<Address, ExitRequest>::new(&env),
+        );
+        env.storage().temporary().extend_ttl(
+            &DataKey::ExitRequests,
+            TEMP_LIFETIME_THRESHOLD,
+            TEMP_BUMP_AMOUNT,
         );
         env.storage()
             .instance()
@@ -1410,7 +1454,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
 
     pub fn get_round_history(env: Env) -> Vec<PayoutRecord> {
         env.storage()
-            .instance()
+            .persistent()
             .get(&DataKey::RoundHistory)
             .unwrap_or(Vec::new(&env))
     }
@@ -1741,7 +1785,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
         // Check no existing pending request
         let mut requests: Map<Address, ExitRequest> = env
             .storage()
-            .instance()
+            .temporary()
             .get(&DataKey::ExitRequests)
             .unwrap_or(Map::new(&env));
         if requests.contains_key(member.clone()) {
@@ -1776,9 +1820,12 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             approved: false,
         };
         requests.set(member.clone(), request);
-        env.storage()
-            .instance()
-            .set(&DataKey::ExitRequests, &requests);
+        env.storage().temporary().set(&DataKey::ExitRequests, &requests);
+        env.storage().temporary().extend_ttl(
+            &DataKey::ExitRequests,
+            TEMP_LIFETIME_THRESHOLD,
+            TEMP_BUMP_AMOUNT,
+        );
 
         events::emit_exit_req(&env, member.clone(), current_round, refund_amount);
 
@@ -1798,7 +1845,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
 
         let mut requests: Map<Address, ExitRequest> = env
             .storage()
-            .instance()
+            .temporary()
             .get(&DataKey::ExitRequests)
             .unwrap_or(Map::new(&env));
         if !requests.contains_key(member.clone()) {
@@ -1844,9 +1891,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .set(&DataKey::ExitedMembers, &exited_members);
 
         requests.remove(member.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::ExitRequests, &requests);
+        env.storage().temporary().set(&DataKey::ExitRequests, &requests);
 
         events::emit_exit_ok(&env, member.clone(), request.refund_amount);
 
@@ -1866,7 +1911,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
 
         let mut requests: Map<Address, ExitRequest> = env
             .storage()
-            .instance()
+            .temporary()
             .get(&DataKey::ExitRequests)
             .unwrap_or(Map::new(&env));
         if !requests.contains_key(member.clone()) {
@@ -1874,9 +1919,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
         }
 
         requests.remove(member.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::ExitRequests, &requests);
+        env.storage().temporary().set(&DataKey::ExitRequests, &requests);
 
         events::emit_exit_no(&env, member.clone());
 
@@ -1887,7 +1930,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
 
     pub fn get_exit_requests(env: Env) -> Map<Address, ExitRequest> {
         env.storage()
-            .instance()
+            .temporary()
             .get(&DataKey::ExitRequests)
             .unwrap_or(Map::new(&env))
     }

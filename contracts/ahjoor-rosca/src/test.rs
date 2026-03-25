@@ -3098,3 +3098,90 @@ fn test_get_member_status_exited_member() {
     assert!(!status.is_suspended);
     assert_eq!(status.default_count, 0);
 }
+
+// ===========================================================================
+//  TTL Extension Behavior Tests
+// ===========================================================================
+
+/// RoundHistory is in persistent storage and must survive ledger advancement
+/// past the instance TTL threshold.
+#[test]
+fn test_round_history_persistent_ttl() {
+    let setup = setup_with_members(2, 1000);
+    default_init(&setup);
+
+    let u1 = setup.members.get(0).unwrap();
+    let u2 = setup.members.get(1).unwrap();
+
+    // Complete one round to write a RoundHistory entry
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.client.contribute(&u2, &setup.token_admin, &100);
+
+    // Advance ledger sequence past instance TTL threshold
+    setup
+        .env
+        .ledger()
+        .set_sequence_number(setup.env.ledger().sequence() + 110_000);
+
+    // RoundHistory must still be accessible (persistent storage, individual TTL)
+    let history = setup.client.get_round_history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history.get(0).unwrap().amount, 200);
+}
+
+/// RoundHistory accumulates across multiple rounds and each write extends TTL.
+#[test]
+fn test_round_history_ttl_extended_each_round() {
+    let setup = setup_with_members(2, 2000);
+    default_init(&setup);
+
+    let u1 = setup.members.get(0).unwrap();
+    let u2 = setup.members.get(1).unwrap();
+
+    // Complete two rounds
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.client.contribute(&u2, &setup.token_admin, &100);
+
+    setup.client.contribute(&u1, &setup.token_admin, &100);
+    setup.client.contribute(&u2, &setup.token_admin, &100);
+
+    setup
+        .env
+        .ledger()
+        .set_sequence_number(setup.env.ledger().sequence() + 110_000);
+
+    let history = setup.client.get_round_history();
+    assert_eq!(history.len(), 2);
+}
+
+/// ExitRequests in temporary storage: a request is stored, accessible, and
+/// cleared correctly after approval.
+#[test]
+fn test_exit_requests_temporary_storage_lifecycle() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    // No requests initially
+    assert!(!client.get_exit_requests().contains_key(u1.clone()));
+
+    // Request stored in temporary storage
+    client.request_emergency_exit(&u1);
+    assert!(client.get_exit_requests().contains_key(u1.clone()));
+
+    // Approval clears the temporary entry
+    client.approve_exit(&u1);
+    assert!(!client.get_exit_requests().contains_key(u1.clone()));
+}
+
+/// ExitRequests in temporary storage: rejection also clears the entry.
+#[test]
+fn test_exit_requests_temporary_cleared_on_reject() {
+    let env = Env::default();
+    let (client, _admin, u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    client.request_emergency_exit(&u1);
+    assert!(client.get_exit_requests().contains_key(u1.clone()));
+
+    client.reject_exit(&u1);
+    assert!(!client.get_exit_requests().contains_key(u1.clone()));
+}

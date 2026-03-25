@@ -1,6 +1,9 @@
 use crate::{errors::Error, events, DataKey, PayoutRecord};
 use soroban_sdk::{panic_with_error, token, Address, Env, Map, Vec};
 
+const PERSISTENT_LIFETIME_THRESHOLD: u32 = 100_000;
+const PERSISTENT_BUMP_AMOUNT: u32 = 120_000;
+
 /// Panics if the contract is currently paused.
 pub(crate) fn check_not_paused(env: &Env) {
     let is_paused: bool = env
@@ -81,9 +84,10 @@ pub(crate) fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
         }
     }
 
+    // Persistent: RoundHistory — append new record and extend its individual TTL
     let mut history: Vec<PayoutRecord> = env
         .storage()
-        .instance()
+        .persistent()
         .get(&DataKey::RoundHistory)
         .unwrap_or(Vec::new(env));
     history.push_back(PayoutRecord {
@@ -91,8 +95,13 @@ pub(crate) fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
         amount: total_payout_history_amt,
     });
     env.storage()
-        .instance()
+        .persistent()
         .set(&DataKey::RoundHistory, &history);
+    env.storage().persistent().extend_ttl(
+        &DataKey::RoundHistory,
+        PERSISTENT_LIFETIME_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
+    );
 
     events::emit_rd_done(
         env,
