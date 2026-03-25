@@ -79,6 +79,22 @@ pub struct DisputeEscalated {
     pub elapsed_seconds: u64,
 }
 
+/// Event: Admin transfer proposed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferProposed {
+    pub current_admin: Address,
+    pub proposed_admin: Address,
+}
+
+/// Event: Admin transfer accepted
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferred {
+    pub old_admin: Address,
+    pub new_admin: Address,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_payment_created(
@@ -165,6 +181,18 @@ pub fn emit_dispute_escalated(e: &Env, payment_id: u32, elapsed_seconds: u64) {
         elapsed_seconds,
     }
     .publish(e);
+}
+
+pub fn emit_admin_transfer_proposed(e: &Env, current_admin: Address, proposed_admin: Address) {
+    AdminTransferProposed {
+        current_admin,
+        proposed_admin,
+    }
+    .publish(e);
+}
+
+pub fn emit_admin_transferred(e: &Env, old_admin: Address, new_admin: Address) {
+    AdminTransferred { old_admin, new_admin }.publish(e);
 }
 
 #[allow(clippy::too_many_arguments)]

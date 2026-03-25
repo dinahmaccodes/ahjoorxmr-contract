@@ -108,6 +108,8 @@ pub enum DataKey {
     UsdcToken,
     /// Maximum age (seconds) an oracle price may be before rejection
     MaxOracleAge,
+    /// Proposed new admin address (pending acceptance)
+    ProposedAdmin,
     // --- Persistent ---
     Payment(u32),
     CustomerPayments(Address),
@@ -658,6 +660,60 @@ impl AhjoorPaymentsContract {
         }
 
         env.storage().instance().set(&DataKey::DisputeTimeout, &timeout);
+    }
+
+    /// Propose a new admin address. Only the current admin can propose.
+    pub fn propose_admin_transfer(env: Env, proposed_admin: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposedAdmin, &proposed_admin);
+
+        events::emit_admin_transfer_proposed(&env, admin, proposed_admin);
+
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Accept the admin role. Only the proposed admin can accept.
+    pub fn accept_admin_role(env: Env) {
+        let proposed_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposedAdmin)
+            .expect("No admin transfer proposed");
+        proposed_admin.require_auth();
+
+        let old_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+
+        env.storage().instance().set(&DataKey::Admin, &proposed_admin);
+        env.storage().instance().remove(&DataKey::ProposedAdmin);
+
+        events::emit_admin_transferred(&env, old_admin, proposed_admin);
+
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the current admin address.
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized")
+    }
+
+    /// Get the proposed admin address, if any.
+    pub fn get_proposed_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::ProposedAdmin)
     }
 
     // --- Read Interface ---

@@ -3185,3 +3185,73 @@ fn test_exit_requests_temporary_cleared_on_reject() {
     client.reject_exit(&u1);
     assert!(!client.get_exit_requests().contains_key(u1.clone()));
 }
+
+// ===========================================================================
+//  Admin Transfer Tests
+// ===========================================================================
+
+#[test]
+fn test_propose_admin_transfer() {
+    let env = Env::default();
+    let (client, admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin_transfer(&new_admin);
+
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_proposed_admin(), Some(new_admin));
+}
+
+#[test]
+fn test_accept_admin_role() {
+    let env = Env::default();
+    let (client, admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin_transfer(&new_admin);
+    client.accept_admin_role();
+
+    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_proposed_admin(), None);
+}
+
+#[test]
+#[should_panic(expected = "No admin transfer proposed")]
+fn test_accept_admin_role_without_proposal_panics() {
+    let env = Env::default();
+    let (client, _admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+    client.accept_admin_role();
+}
+
+#[test]
+fn test_admin_transfer_emits_events() {
+    let env = Env::default();
+    let (client, _admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin_transfer(&new_admin);
+
+    let events = env.events().all();
+    assert!(events.len() > 0);
+
+    client.accept_admin_role();
+
+    let events = env.events().all();
+    assert!(events.len() > 1);
+}
+
+#[test]
+fn test_get_admin_returns_current_admin() {
+    let env = Env::default();
+    let (client, admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_get_proposed_admin_returns_none_when_no_proposal() {
+    let env = Env::default();
+    let (client, _admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+
+    assert_eq!(client.get_proposed_admin(), None);
+}
