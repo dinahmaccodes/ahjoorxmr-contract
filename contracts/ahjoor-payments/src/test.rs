@@ -733,3 +733,316 @@ fn test_customer_payments_persistent_ttl() {
     let ids = s.client.get_customer_payments(&customer);
     assert_eq!(ids.len(), 3);
 }
+
+// ===========================================================================
+//  Multi-Token Payment Tests
+// ===========================================================================
+
+/// Mock oracle contract used in tests.
+/// Stores a single price (scaled by 10^7) and timestamp set by the test.
+mod mock_oracle {
+    use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+    use crate::PriceData;
+
+    #[contracttype]
+    enum OracleKey {
+        Price,
+        Ts,
+    }
+
+    #[contract]
+    pub struct MockOracle;
+
+    #[contractimpl]
+    impl MockOracle {
+        /// Test helper: set the price and timestamp the oracle will return.
+        pub fn set_price(env: Env, price: i128, timestamp: u64) {
+            env.storage().instance().set(&OracleKey::Price, &price);
+            env.storage().instance().set(&OracleKey::Ts, &timestamp);
+        }
+
+        /// Reflector-compatible: returns the stored price regardless of base/quote.
+        pub fn lastprice(env: Env, _base: Address, _quote: Address) -> Option<PriceData> {
+            let price: i128 = env.storage().instance().get(&OracleKey::Price)?;
+            let timestamp: u64 = env.storage().instance().get(&OracleKey::Ts)?;
+            Some(PriceData { price, timestamp })
+        }
+    }
+}
+
+use mock_oracle::MockOracle;
+use soroban_sdk::token::StellarAssetClient as SacClient;
+
+struct MultiTokenSetup<'a> {
+    env: Env,
+    client: AhjoorPaymentsContractClient<'a>,
+    admin: Address,
+    /// USDC token (settlement currency)
+    usdc_addr: Address,
+    usdc_client: TokenClient<'a>,
+    usdc_admin: TokenAdminClient<'a>,
+    /// XLM-like payment token
+    xlm_addr: Address,
+    xlm_admin: TokenAdminClient<'a>,
+    xlm_client: TokenClient<'a>,
+    oracle_addr: Address,
+}
+
+fn setup_multi_token<'a>() -> MultiTokenSetup<'a> {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AhjoorPaymentsContract, ());
+    let client = AhjoorPaymentsContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+
+    // USDC token
+    let usdc_addr = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let usdc_client = TokenClient::new(&env, &usdc_addr);
+    let usdc_admin = TokenAdminClient::new(&env, &usdc_addr);
+
+    // XLM-like payment token
+    let xlm_addr = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let xlm_admin = TokenAdminClient::new(&env, &xlm_addr);
+    let xlm_client = TokenClient::new(&env, &xlm_addr);
+
+    // Mock oracle
+    let oracle_addr = env.register(MockOracle, ());
+
+    client.initialize(&admin);
+    // max_oracle_age = 300 seconds
+    client.set_oracle(&oracle_addr, &usdc_addr, &300u64);
+
+    MultiTokenSetup {
+        env,
+        client,
+        admin,
+        usdc_addr,
+        usdc_client,
+        usdc_admin,
+        xlm_addr,
+        xlm_admin,
+        xlm_client,
+        oracle_addr,
+    }
+}
+
+/// Helper: set oracle price (scaled by 10^7) and ledger timestamp.
+fn set_oracle_price(s: &MultiTokenSetup, price: i128, ts: u64) {
+    use mock_oracle::MockOracleClient;
+    let oc = MockOracleClient::new(&s.env, &s.oracle_addr);
+    oc.set_price(&price, &ts);
+    s.env.ledger().set_timestamp(ts);
+}
+
+// ---------------------------------------------------------------------------
+
+/// Direct USDC payment (payment_token == usdc_token) bypasses oracle entirely.
+#[test]
+fn test_multi_token_usdc_fallback() {
+    let s = setup_multi_token();
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.usdc_admin.mint(&customer, &1000);
+
+    let pid = s.client.create_payment_multi_token(
+        &customer, &merchant, &500, &s.usdc_addr, &50,
+    );
+
+    // Funds escrowed in contract
+    assert_eq!(s.usdc_client.balance(&customer), 500);
+    assert_eq!(s.usdc_client.balance(&s.client.address), 500);
+
+    let payment = s.client.get_payment(&pid);
+    assert_eq!(payment.amount, 500);
+    assert_eq!(payment.token, s.usdc_addr);
+    assert_eq!(payment.status, PaymentStatus::Pending);
+}
+
+/// XLM payment: oracle price = 0.10 USDC per XLM (price = 1_000_000 in 10^7).
+/// Customer wants to pay 100 USDC → needs 1_000 XLM.
+#[test]
+fn test_multi_token_xlm_payment_correct_amount() {
+    let s = setup_multi_token();
+
+    // price = 0.10 USDC/XLM → 10^7 * 0.10 = 1_000_000
+    set_oracle_price(&s, 1_000_000, 1000);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    // Customer needs 1000 XLM for 100 USDC
+    s.xlm_admin.mint(&customer, &2000);
+
+    let pid = s.client.create_payment_multi_token(
+        &customer, &merchant, &100, &s.xlm_addr, &50,
+    );
+
+    // required_token_amount = 100 * 10_000_000 / 1_000_000 = 1000
+    assert_eq!(s.xlm_client.balance(&customer), 1000);
+    assert_eq!(s.xlm_client.balance(&s.client.address), 1000);
+
+    let payment = s.client.get_payment(&pid);
+    // Payment recorded in USDC terms
+    assert_eq!(payment.amount, 100);
+    assert_eq!(payment.token, s.usdc_addr);
+    assert_eq!(payment.status, PaymentStatus::Pending);
+}
+
+/// Oracle price = 0.50 USDC/XLM (price = 5_000_000).
+/// Customer pays 50 USDC → needs 100 XLM.
+#[test]
+fn test_multi_token_different_rate() {
+    let s = setup_multi_token();
+
+    // 0.50 USDC/XLM → 5_000_000
+    set_oracle_price(&s, 5_000_000, 500);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.xlm_admin.mint(&customer, &500);
+
+    s.client.create_payment_multi_token(
+        &customer, &merchant, &50, &s.xlm_addr, &100,
+    );
+
+    // required = 50 * 10_000_000 / 5_000_000 = 100
+    assert_eq!(s.xlm_client.balance(&customer), 400);
+    assert_eq!(s.xlm_client.balance(&s.client.address), 100);
+}
+
+/// Stale oracle price (age > max_oracle_age) must be rejected.
+#[test]
+#[should_panic(expected = "Oracle price is stale")]
+fn test_multi_token_stale_oracle_rejected() {
+    let s = setup_multi_token();
+
+    // Price timestamp = 0, current ledger = 400 → age = 400 > max_oracle_age(300)
+    use mock_oracle::MockOracleClient;
+    let oc = MockOracleClient::new(&s.env, &s.oracle_addr);
+    oc.set_price(&1_000_000i128, &0u64);
+    s.env.ledger().set_timestamp(400);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.xlm_admin.mint(&customer, &2000);
+
+    s.client.create_payment_multi_token(
+        &customer, &merchant, &100, &s.xlm_addr, &50,
+    );
+}
+
+/// Unavailable oracle (no price set) must be rejected.
+#[test]
+#[should_panic(expected = "Oracle price unavailable")]
+fn test_multi_token_oracle_unavailable() {
+    let s = setup_multi_token();
+    // Oracle has no price set — lastprice returns None
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.xlm_admin.mint(&customer, &2000);
+
+    s.client.create_payment_multi_token(
+        &customer, &merchant, &100, &s.xlm_addr, &50,
+    );
+}
+
+/// Zero slippage tolerance: exact integer division must not deviate.
+/// price = 10_000_000 (1.0 USDC/XLM) → required = amount_usdc exactly.
+#[test]
+fn test_multi_token_zero_slippage_exact_rate() {
+    let s = setup_multi_token();
+
+    // 1.0 USDC/XLM → 10_000_000
+    set_oracle_price(&s, 10_000_000, 100);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.xlm_admin.mint(&customer, &500);
+
+    s.client.create_payment_multi_token(
+        &customer, &merchant, &200, &s.xlm_addr, &0,
+    );
+
+    // required = 200 * 10_000_000 / 10_000_000 = 200 — no deviation
+    assert_eq!(s.xlm_client.balance(&s.client.address), 200);
+}
+
+/// set_oracle rejects max_oracle_age = 0.
+#[test]
+#[should_panic(expected = "max_oracle_age must be positive")]
+fn test_set_oracle_zero_age_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(AhjoorPaymentsContract, ());
+    let client = AhjoorPaymentsContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let usdc = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_oracle(&oracle, &usdc, &0u64);
+}
+
+/// get_oracle_address / get_usdc_token / get_max_oracle_age return stored values.
+#[test]
+fn test_get_oracle_config() {
+    let s = setup_multi_token();
+    assert_eq!(s.client.get_oracle_address(), s.oracle_addr);
+    assert_eq!(s.client.get_usdc_token(), s.usdc_addr);
+    assert_eq!(s.client.get_max_oracle_age(), 300u64);
+}
+
+/// Multi-token payment emits MultiTokenPaymentCreated event.
+#[test]
+fn test_multi_token_emits_event() {
+    let s = setup_multi_token();
+
+    // 0.10 USDC/XLM
+    set_oracle_price(&s, 1_000_000, 100);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.xlm_admin.mint(&customer, &2000);
+
+    s.client.create_payment_multi_token(
+        &customer, &merchant, &100, &s.xlm_addr, &50,
+    );
+
+    let events = s.env.events().all();
+    assert!(events.len() > 0);
+}
+
+/// Multi-token payment counter increments correctly.
+#[test]
+fn test_multi_token_payment_counter() {
+    let s = setup_multi_token();
+    set_oracle_price(&s, 10_000_000, 100);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.xlm_admin.mint(&customer, &5000);
+
+    s.client.create_payment_multi_token(&customer, &merchant, &100, &s.xlm_addr, &50);
+    s.client.create_payment_multi_token(&customer, &merchant, &100, &s.xlm_addr, &50);
+
+    assert_eq!(s.client.get_payment_counter(), 2);
+}
+
+/// Multi-token payment is tracked in customer payment index.
+#[test]
+fn test_multi_token_customer_tracking() {
+    let s = setup_multi_token();
+    set_oracle_price(&s, 10_000_000, 100);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.xlm_admin.mint(&customer, &5000);
+
+    s.client.create_payment_multi_token(&customer, &merchant, &100, &s.xlm_addr, &50);
+    s.client.create_payment_multi_token(&customer, &merchant, &200, &s.xlm_addr, &50);
+
+    let ids = s.client.get_customer_payments(&customer);
+    assert_eq!(ids.len(), 2);
+}

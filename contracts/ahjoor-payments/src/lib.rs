@@ -3,6 +3,31 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, Env, String, Vec,
 };
 
+// ---------------------------------------------------------------------------
+// Reflector-compatible oracle interface.
+// lastprice(base, quote) returns Option<PriceData> where price is scaled by
+// 10^decimals(). We call it via a generated client.
+// ---------------------------------------------------------------------------
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceData {
+    /// Price scaled by 10^7 (Reflector standard precision)
+    pub price: i128,
+    /// Ledger timestamp of the price update
+    pub timestamp: u64,
+}
+
+/// Minimal oracle client — only the method we need.
+mod oracle {
+    use soroban_sdk::{contractclient, Address, Env};
+    use crate::PriceData;
+
+    #[contractclient(name = "OracleClient")]
+    pub trait OracleInterface {
+        fn lastprice(env: Env, base: Address, quote: Address) -> Option<PriceData>;
+    }
+}
+
 // --- Storage TTL Constants ---
 // Instance storage: counters and config (shared TTL with contract instance)
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_000;
@@ -20,6 +45,8 @@ const TEMP_BUMP_AMOUNT: u32 = 15_000;
 
 const DEFAULT_MAX_BATCH_SIZE: u32 = 20;
 const DEFAULT_DISPUTE_TIMEOUT: u64 = 7 * 24 * 60 * 60; // 7 days in seconds
+/// Reflector oracle price precision: prices are scaled by 10^7
+const ORACLE_PRICE_PRECISION: i128 = 10_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -60,7 +87,8 @@ pub struct Dispute {
 }
 
 /// Storage key classification:
-/// - Instance:    Admin, PaymentCounter, MaxBatchSize, DisputeTimeout
+/// - Instance:    Admin, PaymentCounter, MaxBatchSize, DisputeTimeout,
+///                OracleAddress, UsdcToken
 ///                (config/counters — bounded, shared TTL with contract)
 /// - Persistent:  Payment(u32), CustomerPayments(Address)
 ///                (per-record data — unbounded, individual TTL)
@@ -74,6 +102,12 @@ pub enum DataKey {
     PaymentCounter,
     MaxBatchSize,
     DisputeTimeout,
+    /// Reflector oracle contract address for token/USDC price feeds
+    OracleAddress,
+    /// USDC token contract address — canonical settlement currency
+    UsdcToken,
+    /// Maximum age (seconds) an oracle price may be before rejection
+    MaxOracleAge,
     // --- Persistent ---
     Payment(u32),
     CustomerPayments(Address),
@@ -406,6 +440,192 @@ impl AhjoorPaymentsContract {
         }
 
         false
+    }
+
+    // --- Oracle / Multi-Token ---
+
+    /// Admin sets the oracle contract address, USDC token address, and max
+    /// oracle price age. Must be called before create_payment_multi_token.
+    pub fn set_oracle(
+        env: Env,
+        oracle: Address,
+        usdc_token: Address,
+        max_oracle_age: u64,
+    ) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        admin.require_auth();
+
+        if max_oracle_age == 0 {
+            panic!("max_oracle_age must be positive");
+        }
+
+        env.storage().instance().set(&DataKey::OracleAddress, &oracle);
+        env.storage().instance().set(&DataKey::UsdcToken, &usdc_token);
+        env.storage().instance().set(&DataKey::MaxOracleAge, &max_oracle_age);
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Create a payment where the customer pays in any supported token.
+    /// The oracle provides the token/USDC rate. The contract:
+    ///   1. Queries the oracle for the current price of `payment_token` in USDC.
+    ///   2. Validates price freshness against `max_oracle_age`.
+    ///   3. Calculates `required_token_amount` from `amount_usdc` and the rate.
+    ///   4. Applies slippage tolerance: rejects if effective rate deviates
+    ///      more than `slippage_bps` basis points from the oracle rate.
+    ///   5. Transfers `required_token_amount` of `payment_token` from customer
+    ///      to contract (escrow).
+    ///   6. Records the payment with `amount = amount_usdc` and `token = usdc_token`
+    ///      so that complete_payment always releases USDC to the merchant.
+    ///
+    /// Fallback: if `payment_token == usdc_token`, behaves identically to
+    /// create_payment (no oracle call, no conversion).
+    ///
+    /// Returns the new payment ID.
+    pub fn create_payment_multi_token(
+        env: Env,
+        customer: Address,
+        merchant: Address,
+        amount_usdc: i128,
+        payment_token: Address,
+        slippage_bps: u32,
+    ) -> u32 {
+        customer.require_auth();
+
+        if amount_usdc <= 0 {
+            panic!("Payment amount must be positive");
+        }
+        if slippage_bps > 10_000 {
+            panic!("slippage_bps cannot exceed 10000");
+        }
+
+        let usdc_token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::UsdcToken)
+            .expect("Oracle not configured");
+
+        // --- Fallback: direct USDC payment, no oracle needed ---
+        if payment_token == usdc_token {
+            return Self::create_payment(env, customer, merchant, amount_usdc, payment_token);
+        }
+
+        let oracle_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleAddress)
+            .expect("Oracle not configured");
+        let max_oracle_age: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxOracleAge)
+            .expect("Oracle not configured");
+
+        // --- Query oracle: price of payment_token denominated in USDC ---
+        // Oracle returns price scaled by ORACLE_PRICE_PRECISION (10^7).
+        let oracle_client = oracle::OracleClient::new(&env, &oracle_addr);
+        let price_data: PriceData = oracle_client
+            .lastprice(&payment_token, &usdc_token)
+            .expect("Oracle price unavailable");
+
+        // --- Freshness check ---
+        let current_ts = env.ledger().timestamp();
+        let age = current_ts.saturating_sub(price_data.timestamp);
+        if age > max_oracle_age {
+            panic!("Oracle price is stale");
+        }
+
+        if price_data.price <= 0 {
+            panic!("Invalid oracle price");
+        }
+
+        // --- Calculate required payment_token amount ---
+        // price = payment_token per USDC, scaled by 10^7
+        // required = amount_usdc * 10^7 / price
+        let required_token_amount = (amount_usdc * ORACLE_PRICE_PRECISION) / price_data.price;
+        if required_token_amount <= 0 {
+            panic!("Computed token amount is zero");
+        }
+
+        // --- Slippage check ---
+        // Effective USDC value of required_token_amount at oracle rate must be
+        // within slippage_bps of amount_usdc.
+        // effective_usdc = required_token_amount * price / 10^7
+        // deviation_bps = abs(effective_usdc - amount_usdc) * 10000 / amount_usdc
+        let effective_usdc = (required_token_amount * price_data.price) / ORACLE_PRICE_PRECISION;
+        let deviation = if effective_usdc >= amount_usdc {
+            effective_usdc - amount_usdc
+        } else {
+            amount_usdc - effective_usdc
+        };
+        let deviation_bps = (deviation * 10_000) / amount_usdc;
+        if deviation_bps > slippage_bps as i128 {
+            panic!("Slippage tolerance exceeded");
+        }
+
+        // --- Transfer payment_token from customer to contract (escrow) ---
+        let pay_client = token::Client::new(&env, &payment_token);
+        pay_client.transfer(&customer, &env.current_contract_address(), &required_token_amount);
+
+        // --- Record payment in USDC terms so complete_payment releases USDC ---
+        let payment_id = Self::next_payment_id(&env);
+        let payment = Payment {
+            id: payment_id,
+            customer: customer.clone(),
+            merchant: merchant.clone(),
+            amount: amount_usdc,
+            token: usdc_token.clone(),
+            status: PaymentStatus::Pending,
+            created_at: env.ledger().timestamp(),
+        };
+
+        env.storage().persistent().set(&DataKey::Payment(payment_id), &payment);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Payment(payment_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        Self::add_customer_payment(&env, &customer, payment_id);
+
+        events::emit_multi_token_payment_created(
+            &env,
+            payment_id,
+            customer,
+            merchant,
+            amount_usdc,
+            payment_token,
+            required_token_amount,
+            price_data.price,
+        );
+
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        payment_id
+    }
+
+    pub fn get_oracle_address(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleAddress)
+            .expect("Oracle not configured")
+    }
+
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::UsdcToken)
+            .expect("Oracle not configured")
+    }
+
+    pub fn get_max_oracle_age(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxOracleAge)
+            .expect("Oracle not configured")
     }
 
     // --- Admin ---

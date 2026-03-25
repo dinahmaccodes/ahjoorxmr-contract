@@ -1,6 +1,20 @@
 use crate::PaymentStatus;
 use soroban_sdk::{contractevent, Address, Env, String};
 
+/// Event: Multi-token payment created (customer paid in non-USDC token)
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MultiTokenPaymentCreated {
+    pub payment_id: u32,
+    pub customer: Address,
+    pub merchant: Address,
+    pub amount_usdc: i128,
+    pub payment_token: Address,
+    pub token_amount: i128,
+    /// Oracle price used (scaled by 10^7)
+    pub oracle_price: i128,
+}
+
 /// Event: Individual payment created
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -149,6 +163,29 @@ pub fn emit_dispute_escalated(e: &Env, payment_id: u32, elapsed_seconds: u64) {
     DisputeEscalated {
         payment_id,
         elapsed_seconds,
+    }
+    .publish(e);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn emit_multi_token_payment_created(
+    e: &Env,
+    payment_id: u32,
+    customer: Address,
+    merchant: Address,
+    amount_usdc: i128,
+    payment_token: Address,
+    token_amount: i128,
+    oracle_price: i128,
+) {
+    MultiTokenPaymentCreated {
+        payment_id,
+        customer,
+        merchant,
+        amount_usdc,
+        payment_token,
+        token_amount,
+        oracle_price,
     }
     .publish(e);
 }
