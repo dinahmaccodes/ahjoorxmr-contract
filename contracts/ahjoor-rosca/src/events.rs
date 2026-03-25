@@ -246,6 +246,22 @@ pub struct RoundReset {
     pub round: u32,
 }
 
+/// Event: Admin transfer proposed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferProposed {
+    pub current_admin: Address,
+    pub proposed_admin: Address,
+}
+
+/// Event: Admin transfer accepted
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminTransferred {
+    pub old_admin: Address,
+    pub new_admin: Address,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_rosc_init(e: &Env, member_count: u32, contribution_amount: i128) {
@@ -466,4 +482,16 @@ pub fn emit_rd_done(e: &Env, round: u32, recipient: Address, payout_amount: i128
 
 pub fn emit_reset(e: &Env, round: u32) {
     RoundReset { round }.publish(e);
+}
+
+pub fn emit_admin_transfer_proposed(e: &Env, current_admin: Address, proposed_admin: Address) {
+    AdminTransferProposed {
+        current_admin,
+        proposed_admin,
+    }
+    .publish(e);
+}
+
+pub fn emit_admin_transferred(e: &Env, old_admin: Address, new_admin: Address) {
+    AdminTransferred { old_admin, new_admin }.publish(e);
 }

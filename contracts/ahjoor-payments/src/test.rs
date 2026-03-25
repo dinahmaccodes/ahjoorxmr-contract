@@ -1046,3 +1046,235 @@ fn test_multi_token_customer_tracking() {
     let ids = s.client.get_customer_payments(&customer);
     assert_eq!(ids.len(), 2);
 }
+
+// ===========================================================================
+//  Token Transfer Integration Tests
+// ===========================================================================
+
+/// Verify customer balance decreases on payment creation
+#[test]
+fn test_token_transfer_on_payment_creation() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let initial_balance = s.token_client.balance(&customer);
+    assert_eq!(initial_balance, 1000);
+
+    s.client.create_payment(&customer, &merchant, &250, &s.token_addr);
+
+    let final_balance = s.token_client.balance(&customer);
+    assert_eq!(final_balance, 750);
+}
+
+/// Verify contract holds escrowed funds
+#[test]
+fn test_contract_holds_escrow() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    s.client.create_payment(&customer, &merchant, &250, &s.token_addr);
+
+    let contract_balance = s.token_client.balance(&s.client.address);
+    assert_eq!(contract_balance, 250);
+}
+
+/// Verify merchant receives tokens on payment completion
+#[test]
+fn test_token_transfer_on_payment_completion() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payment_id = s.client.create_payment(&customer, &merchant, &250, &s.token_addr);
+    s.client.complete_payment(&payment_id);
+
+    let merchant_balance = s.token_client.balance(&merchant);
+    assert_eq!(merchant_balance, 250);
+
+    let contract_balance = s.token_client.balance(&s.client.address);
+    assert_eq!(contract_balance, 0);
+}
+
+/// Verify customer receives tokens on refund
+#[test]
+fn test_token_transfer_on_refund() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payment_id = s.client.create_payment(&customer, &merchant, &250, &s.token_addr);
+    s.client.resolve_dispute(&payment_id, &false); // Release to customer
+
+    let customer_balance = s.token_client.balance(&customer);
+    assert_eq!(customer_balance, 1000);
+
+    let contract_balance = s.token_client.balance(&s.client.address);
+    assert_eq!(contract_balance, 0);
+}
+
+/// Verify batch payment transfers total amount
+#[test]
+fn test_token_transfer_on_batch_payment() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant1 = Address::generate(&s.env);
+    let merchant2 = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payments = soroban_sdk::vec![
+        &s.env,
+        PaymentRequest {
+            merchant: merchant1,
+            amount: 250,
+            token: s.token_addr.clone(),
+        },
+        PaymentRequest {
+            merchant: merchant2,
+            amount: 350,
+            token: s.token_addr.clone(),
+        },
+    ];
+
+    s.client.create_payments_batch(&customer, &payments);
+
+    let customer_balance = s.token_client.balance(&customer);
+    assert_eq!(customer_balance, 400);
+
+    let contract_balance = s.token_client.balance(&s.client.address);
+    assert_eq!(contract_balance, 600);
+}
+
+/// Verify dispute resolution transfers to merchant
+#[test]
+fn test_token_transfer_on_dispute_resolution_to_merchant() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payment_id = s.client.create_payment(&customer, &merchant, &250, &s.token_addr);
+    s.client.dispute_payment(&customer, &payment_id, &String::from_str(&s.env, "Item not received"));
+    s.client.resolve_dispute(&payment_id, &true); // Release to merchant
+
+    let merchant_balance = s.token_client.balance(&merchant);
+    assert_eq!(merchant_balance, 250);
+
+    let customer_balance = s.token_client.balance(&customer);
+    assert_eq!(customer_balance, 750);
+}
+
+/// Verify multiple payments track balances correctly
+#[test]
+fn test_token_balance_tracking_multiple_payments() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let payment1 = s.client.create_payment(&customer, &merchant, &200, &s.token_addr);
+    let payment2 = s.client.create_payment(&customer, &merchant, &300, &s.token_addr);
+
+    let customer_balance = s.token_client.balance(&customer);
+    assert_eq!(customer_balance, 500);
+
+    let contract_balance = s.token_client.balance(&s.client.address);
+    assert_eq!(contract_balance, 500);
+
+    s.client.complete_payment(&payment1);
+
+    let merchant_balance = s.token_client.balance(&merchant);
+    assert_eq!(merchant_balance, 200);
+
+    let contract_balance = s.token_client.balance(&s.client.address);
+    assert_eq!(contract_balance, 300);
+}
+
+// ===========================================================================
+//  Admin Transfer Tests
+// ===========================================================================
+
+#[test]
+fn test_propose_admin_transfer() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let new_admin = Address::generate(&s.env);
+    s.client.propose_admin_transfer(&new_admin);
+
+    assert_eq!(s.client.get_admin(), s.admin);
+    assert_eq!(s.client.get_proposed_admin(), Some(new_admin));
+}
+
+#[test]
+fn test_accept_admin_role() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let new_admin = Address::generate(&s.env);
+    s.client.propose_admin_transfer(&new_admin);
+    s.client.accept_admin_role();
+
+    assert_eq!(s.client.get_admin(), new_admin);
+    assert_eq!(s.client.get_proposed_admin(), None);
+}
+
+#[test]
+#[should_panic(expected = "No admin transfer proposed")]
+fn test_accept_admin_role_without_proposal_panics() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+    s.client.accept_admin_role();
+}
+
+#[test]
+fn test_admin_transfer_emits_events() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let new_admin = Address::generate(&s.env);
+    s.client.propose_admin_transfer(&new_admin);
+
+    let events = s.env.events().all();
+    assert!(events.len() > 0);
+
+    s.client.accept_admin_role();
+
+    let events = s.env.events().all();
+    assert!(events.len() > 1);
+}
+
+#[test]
+fn test_get_admin_returns_current_admin() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    assert_eq!(s.client.get_admin(), s.admin);
+}
+
+#[test]
+fn test_get_proposed_admin_returns_none_when_no_proposal() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    assert_eq!(s.client.get_proposed_admin(), None);
+}
