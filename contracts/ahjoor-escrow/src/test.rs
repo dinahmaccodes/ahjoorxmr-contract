@@ -5,8 +5,10 @@ use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    Address, Env, String,
+    Address, BytesN, Env, String,
 };
+
+const UPGRADE_WASM: &[u8] = include_bytes!("../../../fixtures/upgrade_contract.wasm");
 
 // ---------------------------------------------------------------------------
 //  Test Helpers
@@ -15,6 +17,7 @@ use soroban_sdk::{
 struct TestSetup<'a> {
     env: Env,
     client: AhjoorEscrowContractClient<'a>,
+    admin: Address,
     token_addr: Address,
     token_client: TokenClient<'a>,
     token_admin_client: TokenAdminClient<'a>,
@@ -37,6 +40,7 @@ fn setup<'a>() -> TestSetup<'a> {
     TestSetup {
         env,
         client,
+        admin,
         token_addr,
         token_client,
         token_admin_client,
@@ -102,7 +106,7 @@ fn test_create_escrow_past_deadline_panics() {
     let arbiter = Address::generate(&s.env);
     s.token_admin_client.mint(&buyer, &1000);
 
-    let deadline = s.env.ledger().timestamp() - 1000;
+    let deadline = s.env.ledger().timestamp();
     s.client.create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 }
 
@@ -526,4 +530,64 @@ fn test_escrow_counter_increments() {
     s.client.create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
 
     assert_eq!(s.client.get_escrow_counter(), 2);
+}
+
+// ===========================================================================
+//  Upgradeability Tests
+// ===========================================================================
+
+#[test]
+fn test_admin_can_upgrade_and_version_increments() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    assert_eq!(s.client.get_version(), 1);
+
+    let wasm_hash = s.env.deployer().upload_contract_wasm(UPGRADE_WASM);
+    s.client.upgrade(&s.admin, &wasm_hash);
+
+    let version: u32 = s.env.as_contract(&s.client.address, || {
+        s.env
+            .storage()
+            .instance()
+            .get(&DataKey::ContractVersion)
+            .unwrap()
+    });
+    assert_eq!(version, 2);
+}
+
+#[test]
+fn test_unauthorized_upgrade_fails() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let intruder = Address::generate(&s.env);
+    let wasm_hash = s.env.deployer().upload_contract_wasm(UPGRADE_WASM);
+
+    let result = s.client.try_upgrade(&intruder, &wasm_hash);
+    assert!(result.is_err());
+    assert_eq!(s.client.get_version(), 1);
+}
+
+#[test]
+fn test_migration_runs_once_per_version() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    s.client.migrate(&s.admin);
+
+    let second = s.client.try_migrate(&s.admin);
+    assert!(second.is_err());
+}
+
+#[test]
+fn test_upgrade_atomicity_on_invalid_wasm_hash() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let invalid_hash = BytesN::from_array(&s.env, &[7u8; 32]);
+    let result = s.client.try_upgrade(&s.admin, &invalid_hash);
+
+    assert!(result.is_err());
+    assert_eq!(s.client.get_version(), 1);
 }

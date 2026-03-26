@@ -39,6 +39,15 @@ pub struct RefundProcessed {
     pub processed_at: u64,
 }
 
+/// Event: Contract WASM upgraded
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ContractUpgraded {
+    pub old_version: u32,
+    pub new_version: u32,
+    pub by_admin: Address,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_refund_requested(
@@ -94,6 +103,15 @@ pub fn emit_refund_processed(
         customer,
         amount,
         processed_at,
+    }
+    .publish(e);
+}
+
+pub fn emit_contract_upgraded(e: &Env, old_version: u32, new_version: u32, by_admin: Address) {
+    ContractUpgraded {
+        old_version,
+        new_version,
+        by_admin,
     }
     .publish(e);
 }

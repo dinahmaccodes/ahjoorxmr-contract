@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Vec,
+};
 
 // ---------------------------------------------------------------------------
 // Reflector-compatible oracle interface.
@@ -20,6 +22,7 @@ mod oracle {
     use crate::PriceData;
     use soroban_sdk::{contractclient, Address, Env};
 
+    #[allow(dead_code)]
     #[contractclient(name = "OracleClient")]
     pub trait OracleInterface {
         fn lastprice(env: Env, base: Address, quote: Address) -> Option<PriceData>;
@@ -137,6 +140,10 @@ pub enum DataKey {
     MerchantOpenMode,
     /// Subscription counter
     SubscriptionCounter,
+    /// Current contract schema/runtime version
+    ContractVersion,
+    /// Migration completion flag for a specific version
+    MigrationCompleted(u32),
     // --- Persistent ---
     Payment(u32),
     CustomerPayments(Address),
@@ -173,6 +180,7 @@ impl AhjoorPaymentsContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeTimeout, &DEFAULT_DISPUTE_TIMEOUT);
+        env.storage().instance().set(&DataKey::ContractVersion, &1u32);
 
         env.storage()
             .instance()
@@ -620,7 +628,54 @@ impl AhjoorPaymentsContract {
 
         // --- Fallback: direct USDC payment, no oracle needed ---
         if payment_token == usdc_token {
-            return Self::create_payment(env, customer, merchant, amount_usdc, payment_token);
+            Self::require_merchant_approved(&env, &merchant);
+
+            let client = token::Client::new(&env, &payment_token);
+            client.transfer(&customer, &env.current_contract_address(), &amount_usdc);
+
+            let timeout: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::PaymentTimeout)
+                .unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
+            let now = env.ledger().timestamp();
+
+            let payment_id = Self::next_payment_id(&env);
+            let payment = Payment {
+                id: payment_id,
+                customer: customer.clone(),
+                merchant: merchant.clone(),
+                amount: amount_usdc,
+                token: payment_token.clone(),
+                status: PaymentStatus::Pending,
+                created_at: now,
+                expires_at: now + timeout,
+                refunded_amount: 0,
+            };
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::Payment(payment_id), &payment);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Payment(payment_id),
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+
+            Self::add_customer_payment(&env, &customer, payment_id);
+            events::emit_payment_created(
+                &env,
+                payment_id,
+                customer,
+                merchant,
+                amount_usdc,
+                payment_token,
+            );
+            env.storage()
+                .instance()
+                .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+            return payment_id;
         }
 
         let oracle_addr: Address = env
@@ -843,6 +898,71 @@ impl AhjoorPaymentsContract {
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized")
+    }
+
+    /// Upgrade this contract's WASM code. Admin only.
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can upgrade contract");
+        }
+
+        let old_version = Self::get_or_init_version(&env);
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        let new_version = old_version.checked_add(1).expect("Version overflow");
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &new_version);
+
+        events::emit_contract_upgraded(&env, old_version, new_version, admin);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Run one-time migration logic for the current version. Admin only.
+    pub fn migrate(env: Env, admin: Address) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can migrate contract");
+        }
+
+        let version = Self::get_or_init_version(&env);
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::MigrationCompleted(version))
+            .unwrap_or(false)
+        {
+            panic!("Migration already completed for this version");
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationCompleted(version), &true);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Returns the current contract version.
+    pub fn get_version(env: Env) -> u32 {
+        Self::get_or_init_version(&env)
     }
 
     /// Get the proposed admin address, if any.
@@ -1278,6 +1398,22 @@ impl AhjoorPaymentsContract {
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
+    }
+
+    fn get_or_init_version(env: &Env) -> u32 {
+        if let Some(version) = env
+            .storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::ContractVersion)
+        {
+            version
+        } else {
+            let initial_version = 1u32;
+            env.storage()
+                .instance()
+                .set(&DataKey::ContractVersion, &initial_version);
+            initial_version
+        }
     }
 }
 
