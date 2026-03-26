@@ -78,6 +78,7 @@ impl AhjoorRefundContract {
             panic!("Refund amount must be positive");
         }
 
+        // Escrow funds to this contract so approved refunds can be processed.
         let client = token::Client::new(&env, &token);
         client.transfer(&customer, &env.current_contract_address(), &amount);
 

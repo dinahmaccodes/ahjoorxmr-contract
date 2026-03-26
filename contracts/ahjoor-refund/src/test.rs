@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Events},
     Address, Env, String,
 };
 

@@ -9,6 +9,7 @@ const INSTANCE_BUMP_AMOUNT: u32 = 120_000;
 
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 100_000;
 const PERSISTENT_BUMP_AMOUNT: u32 = 120_000;
+const DEADLINE_EXTENSION_PROPOSAL_WINDOW: u64 = 24 * 60 * 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -43,6 +44,14 @@ pub struct Dispute {
     pub resolved: bool,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeadlineProposal {
+    pub proposer: Address,
+    pub new_deadline: u64,
+    pub proposed_at: u64,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
@@ -52,6 +61,7 @@ pub enum DataKey {
     EscrowCounter,
     Escrow(u32),
     Dispute(u32),
+    DeadlineProposal(u32),
 }
 
 mod events;
@@ -288,6 +298,116 @@ impl AhjoorEscrowContract {
         );
 
         events::emit_escrow_refunded(&env, escrow_id, escrow.buyer, escrow.amount);
+
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Propose a new deadline for an active escrow.
+    /// Only buyer or seller may propose and the proposal requires counterparty acceptance.
+    pub fn propose_deadline_extension(env: Env, caller: Address, escrow_id: u32, new_deadline: u64) {
+        caller.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if caller != escrow.buyer && caller != escrow.seller {
+            panic!("Only buyer or seller can propose deadline extension");
+        }
+
+        if escrow.status == EscrowStatus::Disputed {
+            panic!("Cannot extend deadline while escrow is disputed");
+        }
+
+        if new_deadline <= escrow.deadline {
+            panic!("New deadline must be greater than current deadline");
+        }
+
+        let proposal = DeadlineProposal {
+            proposer: caller.clone(),
+            new_deadline,
+            proposed_at: env.ledger().timestamp(),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::DeadlineProposal(escrow_id), &proposal);
+        env.storage().persistent().extend_ttl(
+            &DataKey::DeadlineProposal(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_deadline_extension_proposed(
+            &env,
+            escrow_id,
+            caller,
+            proposal.new_deadline,
+            proposal.proposed_at,
+        );
+
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Accept a pending deadline extension proposed by the counterparty.
+    pub fn accept_deadline_extension(env: Env, caller: Address, escrow_id: u32) {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if caller != escrow.buyer && caller != escrow.seller {
+            panic!("Only buyer or seller can accept deadline extension");
+        }
+
+        if escrow.status == EscrowStatus::Disputed {
+            panic!("Cannot extend deadline while escrow is disputed");
+        }
+
+        let proposal: DeadlineProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DeadlineProposal(escrow_id))
+            .expect("No deadline extension proposal found");
+
+        if caller == proposal.proposer {
+            panic!("Proposer cannot accept their own deadline extension");
+        }
+
+        let now = env.ledger().timestamp();
+        if now > proposal.proposed_at + DEADLINE_EXTENSION_PROPOSAL_WINDOW {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::DeadlineProposal(escrow_id));
+            panic!("Deadline extension proposal has expired");
+        }
+
+        if proposal.new_deadline <= escrow.deadline {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::DeadlineProposal(escrow_id));
+            panic!("New deadline must be greater than current deadline");
+        }
+
+        let old_deadline = escrow.deadline;
+        escrow.deadline = proposal.new_deadline;
+
+        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+        env.storage()
+            .persistent()
+            .remove(&DataKey::DeadlineProposal(escrow_id));
+
+        events::emit_deadline_extended(&env, escrow_id, old_deadline, escrow.deadline);
 
         env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }

@@ -842,12 +842,10 @@ mod mock_oracle {
 }
 
 use mock_oracle::MockOracle;
-use soroban_sdk::token::StellarAssetClient as SacClient;
-
 struct MultiTokenSetup<'a> {
     env: Env,
     client: AhjoorPaymentsContractClient<'a>,
-    admin: Address,
+    _admin: Address,
     /// USDC token (settlement currency)
     usdc_addr: Address,
     usdc_client: TokenClient<'a>,
@@ -892,7 +890,7 @@ fn setup_multi_token<'a>() -> MultiTokenSetup<'a> {
     MultiTokenSetup {
         env,
         client,
-        admin,
+        _admin: admin,
         usdc_addr,
         usdc_client,
         usdc_admin,
@@ -1285,7 +1283,7 @@ fn test_token_balance_tracking_multiple_payments() {
     let payment1 = s
         .client
         .create_payment(&customer, &merchant, &200, &s.token_addr);
-    let payment2 = s
+    let _payment2 = s
         .client
         .create_payment(&customer, &merchant, &300, &s.token_addr);
 

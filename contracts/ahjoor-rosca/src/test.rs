@@ -22,7 +22,7 @@ pub struct TestSetup<'a> {
     pub members: soroban_sdk::Vec<Address>,
     /// Same underlying client as `token_admin_client`, exposed for clarity in
     /// tests that use the members-oriented helpers.
-    pub member_token_admin: TokenAdminClient<'a>,
+    pub _member_token_admin: TokenAdminClient<'a>,
 }
 
 /// Minimal setup (no members, no minting). Used by tests that manage their own
@@ -50,7 +50,7 @@ fn setup_env<'a>() -> TestSetup<'a> {
         token_client,
         token_admin_client,
         members: soroban_sdk::Vec::new(&Env::default()),
-        member_token_admin,
+        _member_token_admin: member_token_admin,
     }
 }
 
@@ -95,7 +95,7 @@ fn setup_with_members<'a>(n: usize, mint_amount: i128) -> TestSetup<'a> {
         token_client,
         token_admin_client,
         members,
-        member_token_admin,
+        _member_token_admin: member_token_admin,
     }
 }
 
@@ -1665,12 +1665,12 @@ fn test_contribution_pot_separation() {
 fn setup_exit_env(
     env: &Env,
 ) -> (
-    AhjoorContractClient,
+    AhjoorContractClient<'_>,
     Address,
     Address,
     Address,
     Address,
-    soroban_sdk::token::Client,
+    soroban_sdk::token::Client<'_>,
     Address,
 ) {
     env.mock_all_auths();
@@ -3205,7 +3205,7 @@ fn test_propose_admin_transfer() {
 #[test]
 fn test_accept_admin_role() {
     let env = Env::default();
-    let (client, admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
+    let (client, _admin, _u1, _u2, _u3, _tc, _ta) = setup_exit_env(&env);
 
     let new_admin = Address::generate(&env);
     client.propose_admin_transfer(&new_admin);
@@ -3235,6 +3235,8 @@ fn test_admin_transfer_emits_events() {
     assert!(events.len() > 0);
 
     client.accept_admin_role();
+    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_proposed_admin(), None);
 
     let events = env.events().all();
     assert!(events.len() > 0);

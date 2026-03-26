@@ -20,6 +20,7 @@ mod oracle {
     use crate::PriceData;
     use soroban_sdk::{contractclient, Address, Env};
 
+    #[allow(dead_code)]
     #[contractclient(name = "OracleClient")]
     pub trait OracleInterface {
         fn lastprice(env: Env, base: Address, quote: Address) -> Option<PriceData>;
@@ -630,7 +631,54 @@ impl AhjoorPaymentsContract {
 
         // --- Fallback: direct USDC payment, no oracle needed ---
         if payment_token == usdc_token {
-            return Self::create_payment(env, customer, merchant, amount_usdc, payment_token);
+            Self::require_merchant_approved(&env, &merchant);
+
+            let client = token::Client::new(&env, &payment_token);
+            client.transfer(&customer, &env.current_contract_address(), &amount_usdc);
+
+            let timeout: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::PaymentTimeout)
+                .unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
+            let now = env.ledger().timestamp();
+
+            let payment_id = Self::next_payment_id(&env);
+            let payment = Payment {
+                id: payment_id,
+                customer: customer.clone(),
+                merchant: merchant.clone(),
+                amount: amount_usdc,
+                token: payment_token.clone(),
+                status: PaymentStatus::Pending,
+                created_at: now,
+                expires_at: now + timeout,
+                refunded_amount: 0,
+            };
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::Payment(payment_id), &payment);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Payment(payment_id),
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+
+            Self::add_customer_payment(&env, &customer, payment_id);
+            events::emit_payment_created(
+                &env,
+                payment_id,
+                customer,
+                merchant,
+                amount_usdc,
+                payment_token,
+            );
+            env.storage()
+                .instance()
+                .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+            return payment_id;
         }
 
         customer.require_auth();
