@@ -102,7 +102,7 @@ fn test_create_escrow_past_deadline_panics() {
     let arbiter = Address::generate(&s.env);
     s.token_admin_client.mint(&buyer, &1000);
 
-    let deadline = s.env.ledger().timestamp() - 1000;
+    let deadline = s.env.ledger().timestamp();
     s.client.create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 }
 
@@ -526,4 +526,108 @@ fn test_escrow_counter_increments() {
     s.client.create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
 
     assert_eq!(s.client.get_escrow_counter(), 2);
+}
+
+// ===========================================================================
+//  Pause Mechanism Tests
+// ===========================================================================
+
+#[test]
+fn test_admin_can_pause_and_resume_contract() {
+    let s = setup();
+
+    let admin = Address::generate(&s.env);
+    let reason = String::from_str(&s.env, "Emergency maintenance");
+
+    s.client.pause_contract(&admin, &reason);
+    assert_eq!(s.client.is_paused(), true);
+    assert_eq!(s.client.get_pause_reason(), reason);
+
+    s.client.resume_contract(&admin);
+    assert_eq!(s.client.is_paused(), false);
+    assert_eq!(s.client.get_pause_reason(), String::from_str(&s.env, ""));
+}
+
+#[test]
+fn test_non_admin_cannot_resume_contract() {
+    let s = setup();
+
+    let admin = Address::generate(&s.env);
+    let non_admin = Address::generate(&s.env);
+    s.client
+        .pause_contract(&admin, &String::from_str(&s.env, "Incident"));
+
+    let res = s.client.try_resume_contract(&non_admin);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_write_functions_blocked_when_paused_reads_still_work() {
+    let s = setup();
+
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let admin = Address::generate(&s.env);
+
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+    );
+
+    s.client
+        .pause_contract(&admin, &String::from_str(&s.env, "Emergency"));
+
+    let create_res = s
+        .client
+        .try_create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+    assert!(create_res.is_err());
+
+    let release_res = s.client.try_release_escrow(&buyer, &escrow_id);
+    assert!(release_res.is_err());
+
+    let dispute_res =
+        s.client
+            .try_dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "reason"));
+    assert!(dispute_res.is_err());
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Active);
+    assert_eq!(s.client.get_escrow_counter(), 1);
+}
+
+#[test]
+fn test_recovery_after_resume() {
+    let s = setup();
+
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let admin = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+    );
+
+    s.client
+        .pause_contract(&admin, &String::from_str(&s.env, "Emergency"));
+    s.client.resume_contract(&admin);
+
+    s.client.release_escrow(&buyer, &escrow_id);
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Released);
 }

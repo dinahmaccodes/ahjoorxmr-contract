@@ -131,6 +131,10 @@ pub enum DataKey {
     MaxOracleAge,
     /// Proposed new admin address (pending acceptance)
     ProposedAdmin,
+    /// Global emergency stop flag
+    Paused,
+    /// Human-readable pause reason
+    PauseReason,
     /// Global payment timeout in seconds (default: 7 days)
     PaymentTimeout,
     /// When true, merchant allowlist is bypassed (open mode)
@@ -173,6 +177,7 @@ impl AhjoorPaymentsContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeTimeout, &DEFAULT_DISPUTE_TIMEOUT);
+        env.storage().instance().set(&DataKey::Paused, &false);
 
         env.storage()
             .instance()
@@ -191,6 +196,7 @@ impl AhjoorPaymentsContract {
         amount: i128,
         token: Address,
     ) -> u32 {
+        Self::require_not_paused(&env);
         customer.require_auth();
 
         if amount <= 0 {
@@ -251,6 +257,7 @@ impl AhjoorPaymentsContract {
         customer: Address,
         payments: Vec<PaymentRequest>,
     ) -> Vec<u32> {
+        Self::require_not_paused(&env);
         customer.require_auth();
 
         let batch_len = payments.len();
@@ -337,6 +344,7 @@ impl AhjoorPaymentsContract {
 
     /// Admin releases escrowed funds to the merchant. Payment must be Pending.
     pub fn complete_payment(env: Env, payment_id: u32) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -392,6 +400,7 @@ impl AhjoorPaymentsContract {
     /// Customer disputes a Pending payment. Dispute state stored in temporary storage
     /// (short-lived, in-progress — auto-expires once resolved or timed out).
     pub fn dispute_payment(env: Env, customer: Address, payment_id: u32, reason: String) {
+        Self::require_not_paused(&env);
         customer.require_auth();
 
         let mut payment: Payment = env
@@ -446,6 +455,7 @@ impl AhjoorPaymentsContract {
 
     /// Admin resolves a dispute. Clears temporary dispute state on resolution.
     pub fn resolve_dispute(env: Env, payment_id: u32, release_to_merchant: bool) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -554,6 +564,7 @@ impl AhjoorPaymentsContract {
     /// Admin sets the oracle contract address, USDC token address, and max
     /// oracle price age. Must be called before create_payment_multi_token.
     pub fn set_oracle(env: Env, oracle: Address, usdc_token: Address, max_oracle_age: u64) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -603,8 +614,7 @@ impl AhjoorPaymentsContract {
         payment_token: Address,
         slippage_bps: u32,
     ) -> u32 {
-        customer.require_auth();
-
+        Self::require_not_paused(&env);
         if amount_usdc <= 0 {
             panic!("Payment amount must be positive");
         }
@@ -622,6 +632,8 @@ impl AhjoorPaymentsContract {
         if payment_token == usdc_token {
             return Self::create_payment(env, customer, merchant, amount_usdc, payment_token);
         }
+
+        customer.require_auth();
 
         let oracle_addr: Address = env
             .storage()
@@ -757,6 +769,7 @@ impl AhjoorPaymentsContract {
     // --- Admin ---
 
     pub fn set_max_batch_size(env: Env, new_size: u32) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -774,6 +787,7 @@ impl AhjoorPaymentsContract {
     }
 
     pub fn set_dispute_timeout(env: Env, timeout: u64) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -792,6 +806,7 @@ impl AhjoorPaymentsContract {
 
     /// Propose a new admin address. Only the current admin can propose.
     pub fn propose_admin_transfer(env: Env, proposed_admin: Address) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -812,6 +827,7 @@ impl AhjoorPaymentsContract {
 
     /// Accept the admin role. Only the proposed admin can accept.
     pub fn accept_admin_role(env: Env) {
+        Self::require_not_paused(&env);
         let proposed_admin: Address = env
             .storage()
             .instance()
@@ -907,6 +923,7 @@ impl AhjoorPaymentsContract {
 
     /// Admin sets the global payment timeout in seconds.
     pub fn set_payment_timeout(env: Env, timeout_seconds: u64) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -934,6 +951,7 @@ impl AhjoorPaymentsContract {
     /// Expire a pending payment after its deadline. Callable by anyone.
     /// Returns funds to the customer and emits PaymentExpired event.
     pub fn expire_payment(env: Env, payment_id: u32) {
+        Self::require_not_paused(&env);
         let mut payment: Payment = env
             .storage()
             .persistent()
@@ -979,6 +997,7 @@ impl AhjoorPaymentsContract {
     /// Process a partial refund on a disputed payment. Admin only.
     /// `refund_amount` must be <= (payment.amount - payment.refunded_amount).
     pub fn partial_refund(env: Env, payment_id: u32, refund_amount: i128) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -1036,6 +1055,7 @@ impl AhjoorPaymentsContract {
 
     /// Admin approves a merchant address.
     pub fn approve_merchant(env: Env, merchant: Address) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -1049,6 +1069,7 @@ impl AhjoorPaymentsContract {
 
     /// Admin revokes a merchant address.
     pub fn revoke_merchant(env: Env, merchant: Address) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -1070,6 +1091,7 @@ impl AhjoorPaymentsContract {
 
     /// Admin toggles open mode (bypasses merchant allowlist).
     pub fn set_merchant_open_mode(env: Env, open: bool) {
+        Self::require_not_paused(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -1100,6 +1122,7 @@ impl AhjoorPaymentsContract {
         interval_seconds: u64,
         max_charges: u32,
     ) -> u32 {
+        Self::require_not_paused(&env);
         subscriber.require_auth();
         if amount <= 0 {
             panic!("Subscription amount must be positive");
@@ -1150,6 +1173,7 @@ impl AhjoorPaymentsContract {
 
     /// Charge a subscription. Callable by anyone when the interval has elapsed.
     pub fn charge_subscription(env: Env, subscription_id: u32) {
+        Self::require_not_paused(&env);
         let mut sub: Subscription = env
             .storage()
             .persistent()
@@ -1194,6 +1218,7 @@ impl AhjoorPaymentsContract {
 
     /// Cancel a subscription. Subscriber or merchant can cancel.
     pub fn cancel_subscription(env: Env, caller: Address, subscription_id: u32) {
+        Self::require_not_paused(&env);
         caller.require_auth();
 
         let mut sub: Subscription = env
@@ -1225,7 +1250,62 @@ impl AhjoorPaymentsContract {
             .expect("Subscription not found")
     }
 
+    pub fn pause_contract(env: Env, admin: Address, reason: String) {
+        Self::require_admin(&env, &admin);
+
+        if Self::is_paused(env.clone()) {
+            panic!("Contract already paused");
+        }
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.storage().instance().set(&DataKey::PauseReason, &reason);
+
+        events::emit_contract_paused(&env, admin, reason, env.ledger().timestamp());
+    }
+
+    pub fn resume_contract(env: Env, admin: Address) {
+        Self::require_admin(&env, &admin);
+
+        if !Self::is_paused(env.clone()) {
+            panic!("Contract is not paused");
+        }
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().remove(&DataKey::PauseReason);
+
+        events::emit_contract_resumed(&env, admin, env.ledger().timestamp());
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    }
+
+    pub fn get_pause_reason(env: Env) -> String {
+        env.storage()
+            .instance()
+            .get(&DataKey::PauseReason)
+            .unwrap_or(String::from_str(&env, ""))
+    }
+
     // --- Internal Helpers ---
+
+    fn require_not_paused(env: &Env) {
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            panic!("Contract is paused");
+        }
+    }
+
+    fn require_admin(env: &Env, admin: &Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if stored_admin != *admin {
+            panic!("Only admin can manage pause state");
+        }
+    }
 
     /// Validates merchant is approved or open mode is enabled.
     fn require_merchant_approved(env: &Env, merchant: &Address) {

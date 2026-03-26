@@ -39,6 +39,23 @@ pub struct RefundProcessed {
     pub processed_at: u64,
 }
 
+/// Event: Contract paused
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ContractPaused {
+    pub admin: Address,
+    pub reason: String,
+    pub timestamp: u64,
+}
+
+/// Event: Contract resumed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ContractResumed {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_refund_requested(
@@ -96,4 +113,17 @@ pub fn emit_refund_processed(
         processed_at,
     }
     .publish(e);
+}
+
+pub fn emit_contract_paused(e: &Env, admin: Address, reason: String, timestamp: u64) {
+    ContractPaused {
+        admin,
+        reason,
+        timestamp,
+    }
+    .publish(e);
+}
+
+pub fn emit_contract_resumed(e: &Env, admin: Address, timestamp: u64) {
+    ContractResumed { admin, timestamp }.publish(e);
 }

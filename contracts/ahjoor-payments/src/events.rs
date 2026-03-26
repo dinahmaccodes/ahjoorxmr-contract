@@ -95,6 +95,23 @@ pub struct AdminTransferred {
     pub new_admin: Address,
 }
 
+/// Event: Contract paused
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ContractPaused {
+    pub admin: Address,
+    pub reason: String,
+    pub timestamp: u64,
+}
+
+/// Event: Contract resumed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ContractResumed {
+    pub admin: Address,
+    pub timestamp: u64,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_payment_created(
@@ -193,6 +210,19 @@ pub fn emit_admin_transfer_proposed(e: &Env, current_admin: Address, proposed_ad
 
 pub fn emit_admin_transferred(e: &Env, old_admin: Address, new_admin: Address) {
     AdminTransferred { old_admin, new_admin }.publish(e);
+}
+
+pub fn emit_contract_paused(e: &Env, admin: Address, reason: String, timestamp: u64) {
+    ContractPaused {
+        admin,
+        reason,
+        timestamp,
+    }
+    .publish(e);
+}
+
+pub fn emit_contract_resumed(e: &Env, admin: Address, timestamp: u64) {
+    ContractResumed { admin, timestamp }.publish(e);
 }
 
 #[allow(clippy::too_many_arguments)]

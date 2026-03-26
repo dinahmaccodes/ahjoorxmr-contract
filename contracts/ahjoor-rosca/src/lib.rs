@@ -163,6 +163,7 @@ pub enum DataKey {
     RewardDistType,      // DistributionType
     ExitedMembers,       // Vec<Address>
     ExitPenaltyBps,      // u32 (basis points, e.g. 1000 = 10%)
+    Paused,              // bool (global pause alias)
     IsPaused,            // bool
     PauseReason,         // String
     PauseTimestamp,      // u64
@@ -333,6 +334,7 @@ impl AhjoorContract {
         env.storage()
             .instance()
             .set(&DataKey::ExitedMembers, &Vec::<Address>::new(&env));
+        env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::IsPaused, &false);
         env.storage().instance().set(
             &DataKey::MemberContributions,
@@ -1736,6 +1738,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             panic_with_error!(&env, Error::AlreadyPaused);
         }
 
+        env.storage().instance().set(&DataKey::Paused, &true);
         env.storage().instance().set(&DataKey::IsPaused, &true);
         env.storage().instance().set(&DataKey::PauseReason, &reason);
         env.storage()
@@ -1778,6 +1781,7 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             );
         }
 
+        env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::IsPaused, &false);
 
         // Clean up Reason and Timestamp to save storage space
@@ -1790,8 +1794,42 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()
-            .get(&DataKey::IsPaused)
+            .get(&DataKey::Paused)
+            .or(env.storage().instance().get(&DataKey::IsPaused))
             .unwrap_or(false)
+    }
+
+    pub fn get_pause_reason(env: Env) -> soroban_sdk::String {
+        env.storage()
+            .instance()
+            .get(&DataKey::PauseReason)
+            .unwrap_or(soroban_sdk::String::from_str(&env, ""))
+    }
+
+    pub fn pause_contract(env: Env, admin: Address, reason: soroban_sdk::String) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        if admin != stored_admin {
+            panic!("Only admin can pause contract");
+        }
+        admin.require_auth();
+        Self::pause_group(env, reason);
+    }
+
+    pub fn resume_contract(env: Env, admin: Address) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        if admin != stored_admin {
+            panic!("Only admin can resume contract");
+        }
+        admin.require_auth();
+        Self::resume_group(env.clone(), soroban_sdk::String::from_str(&env, "Resumed"));
     }
 
     pub fn get_pause_info(env: Env) -> (bool, soroban_sdk::String, u64) {

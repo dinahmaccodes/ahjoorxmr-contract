@@ -9,7 +9,8 @@ pub(crate) fn check_not_paused(env: &Env) {
     let is_paused: bool = env
         .storage()
         .instance()
-        .get(&DataKey::IsPaused)
+        .get(&DataKey::Paused)
+        .or(env.storage().instance().get(&DataKey::IsPaused))
         .unwrap_or(false);
     if is_paused {
         panic_with_error!(env, Error::ContractPaused);
