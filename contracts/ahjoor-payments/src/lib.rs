@@ -20,6 +20,7 @@ mod oracle {
     use crate::PriceData;
     use soroban_sdk::{contractclient, Address, Env};
 
+    #[allow(dead_code)]
     #[contractclient(name = "OracleClient")]
     pub trait OracleInterface {
         fn lastprice(env: Env, base: Address, quote: Address) -> Option<PriceData>;
@@ -603,8 +604,6 @@ impl AhjoorPaymentsContract {
         payment_token: Address,
         slippage_bps: u32,
     ) -> u32 {
-        customer.require_auth();
-
         if amount_usdc <= 0 {
             panic!("Payment amount must be positive");
         }
@@ -622,6 +621,8 @@ impl AhjoorPaymentsContract {
         if payment_token == usdc_token {
             return Self::create_payment(env, customer, merchant, amount_usdc, payment_token);
         }
+
+        customer.require_auth();
 
         let oracle_addr: Address = env
             .storage()

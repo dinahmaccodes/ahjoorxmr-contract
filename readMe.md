@@ -66,6 +66,16 @@ stellar contract build
 make test
 ```
 
+### Coverage
+
+```bash
+# Install once
+cargo install cargo-llvm-cov --locked
+
+# Enforce thresholds (line >= 90%, branch/region >= 85%)
+make coverage
+```
+
 ### Format & Lint
 
 ```bash

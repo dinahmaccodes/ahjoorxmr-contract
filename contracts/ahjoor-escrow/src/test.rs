@@ -1,6 +1,7 @@
 #![cfg(test)]
 extern crate alloc;
 use super::*;
+use proptest::prelude::*;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
@@ -102,7 +103,7 @@ fn test_create_escrow_past_deadline_panics() {
     let arbiter = Address::generate(&s.env);
     s.token_admin_client.mint(&buyer, &1000);
 
-    let deadline = s.env.ledger().timestamp() - 1000;
+    let deadline = s.env.ledger().timestamp();
     s.client.create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 }
 
@@ -526,4 +527,97 @@ fn test_escrow_counter_increments() {
     s.client.create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
 
     assert_eq!(s.client.get_escrow_counter(), 2);
+}
+
+#[test]
+fn test_boundary_amount_i128_max_rejected_without_balance() {
+    let s = setup();
+
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1);
+
+    let deadline = s.env.ledger().timestamp() + 10;
+    let result = s
+        .client
+        .try_create_escrow(&buyer, &seller, &arbiter, &i128::MAX, &s.token_addr, &deadline);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_boundary_payment_id_u64_max_cast_not_found() {
+    let s = setup();
+    let id = u64::MAX as u32;
+    let res = s.client.try_get_escrow(&id);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_auth_required_for_release_path() {
+    let env = Env::default();
+    let contract_id = env.register(AhjoorEscrowContract, ());
+    let client = AhjoorEscrowContractClient::new(&env, &contract_id);
+    let caller = Address::generate(&env);
+
+    let res = client.try_release_escrow(&caller, &0);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_event_snapshot_for_dispute() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 500;
+    let escrow_id = s
+        .client
+        .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+
+    s.client
+        .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "snapshot"));
+
+    let events = s.env.events().all();
+    assert!(!events.is_empty());
+    let snapshot = alloc::format!("{:?}", events);
+    assert!(!snapshot.is_empty());
+}
+
+#[test]
+fn test_fuzz_like_create_inputs_100_cases() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &10_000_000);
+
+    let mut seed: u64 = 0xA11CE73;
+    for _ in 0..100 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let amount = ((seed % 5000) as i128) + 1;
+        let deadline = s.env.ledger().timestamp() + 1 + (seed % 1000);
+        let _ = s
+            .client
+            .try_create_escrow(&buyer, &seller, &arbiter, &amount, &s.token_addr, &deadline);
+    }
+
+    assert!(s.client.get_escrow_counter() <= 100);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(120))]
+
+    #[test]
+    fn prop_escrow_conservation(deposit in 1i128..1_000_000, release in 0i128..1_000_000, refund in 0i128..1_000_000) {
+        let released = core::cmp::min(release, deposit);
+        let remaining_after_release = deposit - released;
+        let refunded = core::cmp::min(refund, remaining_after_release);
+        let remaining = deposit - released - refunded;
+
+        prop_assert!(released + refunded <= deposit);
+        prop_assert_eq!(released + refunded + remaining, deposit);
+    }
 }

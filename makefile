@@ -12,5 +12,8 @@ build:
 fmt:
 	cargo fmt --all
 
+coverage:
+	cargo llvm-cov --workspace --summary-only --fail-under-lines 90 --fail-under-regions 85
+
 clean:
 	cargo clean
