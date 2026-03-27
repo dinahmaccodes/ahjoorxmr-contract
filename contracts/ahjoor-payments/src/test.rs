@@ -557,9 +557,106 @@ fn test_set_max_batch_size() {
     assert_eq!(s.client.get_max_batch_size(), 50);
 }
 
-// ===========================================================================
-//  Read Interface Tests
-// ===========================================================================
+
+#[test]
+fn test_rate_limit_blocks_after_max_within_window() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+    s.client.update_rate_limit_config(&s.admin, &2, &10);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    // First and last allowed requests in the same window.
+    s.client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    s.client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+
+    // Over-limit request must fail with contract error.
+    let res = s
+        .client
+        .try_create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    assert_eq!(res.unwrap_err().unwrap(), Error::RateLimitExceeded.into());
+}
+
+#[test]
+fn test_rate_limit_window_resets_after_window_size_ledgers() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+    s.client.update_rate_limit_config(&s.admin, &2, &5);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    s.client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    s.client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    let blocked =
+        s.client
+            .try_create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    assert_eq!(
+        blocked.unwrap_err().unwrap(),
+        Error::RateLimitExceeded.into()
+    );
+
+    // Advance exactly one full window; next request should be allowed.
+    s.env
+        .ledger()
+        .set_sequence_number(s.env.ledger().sequence() + 5);
+    let allowed =
+        s.client
+            .try_create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    assert!(allowed.is_ok());
+}
+
+#[test]
+fn test_rate_limit_applies_per_customer_not_globally() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+    s.client.update_rate_limit_config(&s.admin, &1, &20);
+
+    let customer_a = Address::generate(&s.env);
+    let customer_b = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer_a, &500);
+    s.token_admin_client.mint(&customer_b, &500);
+
+    s.client
+        .create_payment(&customer_a, &merchant, &100, &s.token_addr, &None, &None);
+    let blocked_a =
+        s.client
+            .try_create_payment(&customer_a, &merchant, &100, &s.token_addr, &None, &None);
+    assert_eq!(
+        blocked_a.unwrap_err().unwrap(),
+        Error::RateLimitExceeded.into()
+    );
+
+    // Another customer still has independent quota in same ledger window.
+    let allowed_b =
+        s.client
+            .try_create_payment(&customer_b, &merchant, &100, &s.token_addr, &None, &None);
+    assert!(allowed_b.is_ok());
+}
+
+#[test]
+fn test_admin_can_update_rate_limit_config() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let cfg_before = s.client.get_rate_limit_config();
+    assert_eq!(cfg_before.max_payments, u32::MAX);
+    assert_eq!(cfg_before.window_size_ledgers, 1);
+
+    s.client.update_rate_limit_config(&s.admin, &7, &42);
+    let cfg_after = s.client.get_rate_limit_config();
+    assert_eq!(cfg_after.max_payments, 7);
+    assert_eq!(cfg_after.window_size_ledgers, 42);
+}
+
 
 #[test]
 fn test_is_disputed() {
