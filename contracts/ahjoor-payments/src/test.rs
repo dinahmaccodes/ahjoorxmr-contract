@@ -1683,6 +1683,144 @@ fn test_recovery_after_resume() {
 }
 
 // ===========================================================================
+//  Payment Receipt / Proof Tests (#65)
+// ===========================================================================
+
+#[test]
+fn test_complete_payment_stores_receipt() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &500, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid);
+
+    // Receipt must be retrievable after completion
+    let receipt = s.client.get_payment_receipt(&pid);
+    assert_eq!(receipt.len(), 32);
+}
+
+#[test]
+fn test_verify_payment_returns_true_for_correct_hash() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &500, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid);
+
+    let receipt = s.client.get_payment_receipt(&pid);
+    assert!(s.client.verify_payment(&pid, &receipt));
+}
+
+#[test]
+fn test_verify_payment_returns_false_for_wrong_hash() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &500, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid);
+
+    let wrong_hash = BytesN::from_array(&s.env, &[0u8; 32]);
+    assert!(!s.client.verify_payment(&pid, &wrong_hash));
+}
+
+#[test]
+fn test_verify_payment_returns_false_for_pending_payment() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &500, &s.token_addr, &None, &None);
+    // Not completed — no receipt stored
+
+    let any_hash = BytesN::from_array(&s.env, &[1u8; 32]);
+    assert!(!s.client.verify_payment(&pid, &any_hash));
+}
+
+#[test]
+#[should_panic(expected = "Receipt not found")]
+fn test_get_receipt_for_pending_payment_panics() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &500, &s.token_addr, &None, &None);
+    // No complete_payment call — receipt must not exist
+    s.client.get_payment_receipt(&pid);
+}
+
+#[test]
+fn test_receipt_hashes_differ_for_different_payments() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &2000);
+
+    let pid0 = s
+        .client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    let pid1 = s
+        .client
+        .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+
+    s.client.complete_payment(&pid0);
+    // Advance timestamp so completed_at differs
+    s.env.ledger().set_timestamp(s.env.ledger().timestamp() + 1);
+    s.client.complete_payment(&pid1);
+
+    let h0 = s.client.get_payment_receipt(&pid0);
+    let h1 = s.client.get_payment_receipt(&pid1);
+    assert_ne!(h0, h1);
+}
+
+#[test]
+fn test_receipt_event_emitted_on_complete() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &300, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid);
+
+    // At least PaymentCompleted + PaymentStatusChanged + PaymentReceiptIssued
+    assert!(s.env.events().all().len() >= 3);
+}
+
+// ===========================================================================
 //  Reference & Metadata Tests (#67)
 // ===========================================================================
 
