@@ -1,7 +1,14 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Vec,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Vec,
 };
+
+/// Maximum length (bytes) for the optional payment reference string.
+const MAX_REFERENCE_LEN: u32 = 64;
+/// Maximum number of entries in the optional metadata map.
+const MAX_METADATA_KEYS: u32 = 5;
+/// Maximum length (bytes) for each metadata key or value.
+const MAX_METADATA_KEY_LEN: u32 = 32;
 
 // ---------------------------------------------------------------------------
 // Reflector-compatible oracle interface.
@@ -73,6 +80,10 @@ pub struct Payment {
     pub expires_at: u64,
     /// Cumulative amount refunded via partial refunds.
     pub refunded_amount: i128,
+    /// Optional merchant reference string (max 64 bytes) for off-chain reconciliation.
+    pub reference: Option<String>,
+    /// Optional key-value metadata (max 5 keys, each max 32 bytes).
+    pub metadata: Option<Map<String, String>>,
 }
 
 #[contracttype]
@@ -81,6 +92,8 @@ pub struct PaymentRequest {
     pub merchant: Address,
     pub amount: i128,
     pub token: Address,
+    pub reference: Option<String>,
+    pub metadata: Option<Map<String, String>>,
 }
 
 #[contracttype]
@@ -155,6 +168,8 @@ pub enum DataKey {
     MerchantApproved(Address),
     /// Subscription record
     Subscription(u32),
+    /// Index: (merchant, reference_hash) → Vec<u32> of payment IDs
+    MerchantReference(Address, u32),
     // --- Temporary ---
     Dispute(u32),
 }
@@ -196,6 +211,7 @@ impl AhjoorPaymentsContract {
     /// Payment record stored in persistent storage with individual TTL.
     /// Rejects unapproved merchants unless open mode is enabled (#58).
     /// Sets expiry based on global payment timeout (#54).
+    /// Accepts optional reference (max 64 bytes) and metadata (max 5 keys) (#67).
     /// Returns the new payment ID.
     pub fn create_payment(
         env: Env,
@@ -203,6 +219,8 @@ impl AhjoorPaymentsContract {
         merchant: Address,
         amount: i128,
         token: Address,
+        reference: Option<String>,
+        metadata: Option<Map<String, String>>,
     ) -> u32 {
         Self::require_not_paused(&env);
         customer.require_auth();
@@ -210,6 +228,10 @@ impl AhjoorPaymentsContract {
         if amount <= 0 {
             panic!("Payment amount must be positive");
         }
+
+        // Validate optional reference and metadata (#67)
+        Self::validate_reference(&env, &reference);
+        Self::validate_metadata(&env, &metadata);
 
         // Merchant allowlist check (#58)
         Self::require_merchant_approved(&env, &merchant);
@@ -235,6 +257,8 @@ impl AhjoorPaymentsContract {
             created_at: now,
             expires_at: now + timeout,
             refunded_amount: 0,
+            reference: reference.clone(),
+            metadata,
         };
 
         // Persistent: per-payment record with individual TTL
@@ -248,6 +272,11 @@ impl AhjoorPaymentsContract {
         );
 
         Self::add_customer_payment(&env, &customer, payment_id);
+
+        // Index by merchant+reference if provided (#67)
+        if let Some(ref r) = reference {
+            Self::index_payment_by_reference(&env, &merchant, r, payment_id);
+        }
 
         events::emit_payment_created(&env, payment_id, customer, merchant, amount, token);
 
@@ -298,6 +327,8 @@ impl AhjoorPaymentsContract {
                 panic!("Payment amount must be positive");
             }
 
+            Self::validate_reference(&env, &request.reference);
+            Self::validate_metadata(&env, &request.metadata);
             Self::require_merchant_approved(&env, &request.merchant);
 
             let client = token::Client::new(&env, &request.token);
@@ -314,6 +345,8 @@ impl AhjoorPaymentsContract {
                 created_at: now,
                 expires_at: now + timeout,
                 refunded_amount: 0,
+                reference: request.reference.clone(),
+                metadata: request.metadata.clone(),
             };
 
             // Persistent: per-payment record with individual TTL
@@ -327,6 +360,11 @@ impl AhjoorPaymentsContract {
             );
 
             Self::add_customer_payment(&env, &customer, payment_id);
+
+            // Index by merchant+reference if provided (#67)
+            if let Some(ref r) = request.reference {
+                Self::index_payment_by_reference(&env, &request.merchant, r, payment_id);
+            }
 
             events::emit_payment_created(
                 &env,
@@ -662,6 +700,8 @@ impl AhjoorPaymentsContract {
                 created_at: now,
                 expires_at: now + timeout,
                 refunded_amount: 0,
+                reference: None,
+                metadata: None,
             };
 
             env.storage()
@@ -770,6 +810,8 @@ impl AhjoorPaymentsContract {
             created_at: now,
             expires_at: now + timeout,
             refunded_amount: 0,
+            reference: None,
+            metadata: None,
         };
 
         env.storage()
@@ -994,6 +1036,15 @@ impl AhjoorPaymentsContract {
             .persistent()
             .get(&DataKey::Payment(payment_id))
             .expect("Payment not found")
+    }
+
+    /// Look up all payment IDs for a merchant+reference pair (#67).
+    pub fn get_payments_by_reference(env: Env, merchant: Address, reference: String) -> Vec<u32> {
+        let hash = Self::reference_hash(&env, &reference);
+        env.storage()
+            .persistent()
+            .get(&DataKey::MerchantReference(merchant, hash))
+            .unwrap_or(Vec::new(&env))
     }
 
     pub fn get_customer_payments(env: Env, customer: Address) -> Vec<u32> {
@@ -1447,6 +1498,62 @@ impl AhjoorPaymentsContract {
         if !approved {
             panic!("Merchant not approved");
         }
+    }
+
+    /// Validate optional reference string: max 64 bytes (#67).
+    fn validate_reference(env: &Env, reference: &Option<String>) {
+        if let Some(r) = reference {
+            if r.len() > MAX_REFERENCE_LEN {
+                panic!("Reference exceeds maximum length of 64 bytes");
+            }
+            let _ = env; // suppress unused warning
+        }
+    }
+
+    /// Validate optional metadata map: max 5 keys, each key/value max 32 bytes (#67).
+    fn validate_metadata(env: &Env, metadata: &Option<Map<String, String>>) {
+        if let Some(m) = metadata {
+            if m.len() > MAX_METADATA_KEYS {
+                panic!("Metadata exceeds maximum of 5 keys");
+            }
+            for (k, v) in m.iter() {
+                if k.len() > MAX_METADATA_KEY_LEN {
+                    panic!("Metadata key exceeds maximum length of 32 bytes");
+                }
+                if v.len() > MAX_METADATA_KEY_LEN {
+                    panic!("Metadata value exceeds maximum length of 32 bytes");
+                }
+            }
+            let _ = env; // suppress unused warning
+        }
+    }
+
+    /// Compute a simple u32 hash of a reference string for use as a storage key (#67).
+    fn reference_hash(_env: &Env, reference: &String) -> u32 {
+        let bytes = reference.to_bytes();
+        let mut h: u32 = 2166136261u32;
+        for b in bytes.iter() {
+            h = h.wrapping_mul(16777619).wrapping_add(b as u32);
+        }
+        h
+    }
+
+    /// Append payment_id to the merchant+reference index (#67).
+    fn index_payment_by_reference(env: &Env, merchant: &Address, reference: &String, payment_id: u32) {
+        let hash = Self::reference_hash(env, reference);
+        let key = DataKey::MerchantReference(merchant.clone(), hash);
+        let mut ids: Vec<u32> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(env));
+        ids.push_back(payment_id);
+        env.storage().persistent().set(&key, &ids);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
 
     fn next_payment_id(env: &Env) -> u32 {
