@@ -25,8 +25,7 @@ pub(crate) fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
         .instance()
         .get(&DataKey::CurrentRound)
         .unwrap();
-    let payout_order: Vec<Address> =
-        env.storage().instance().get(&DataKey::PayoutOrder).unwrap();
+    let payout_order: Vec<Address> = env.storage().instance().get(&DataKey::PayoutOrder).unwrap();
     let suspended_members: Vec<Address> = env
         .storage()
         .instance()

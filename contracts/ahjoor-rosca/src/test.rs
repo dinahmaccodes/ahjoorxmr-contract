@@ -144,7 +144,9 @@ fn test_rosca_flow_with_time_locks() {
     assert_eq!(setup.token_client.balance(&user1), 900);
 
     setup.env.ledger().set_timestamp(3601);
-    let result = setup.client.try_contribute(&user2, &setup.token_admin, &100);
+    let result = setup
+        .client
+        .try_contribute(&user2, &setup.token_admin, &100);
     assert!(result.is_err());
 
     setup.client.close_round();
@@ -192,7 +194,9 @@ fn test_late_contribution_rejection() {
 
     let user1 = setup.members.get(0).unwrap();
     setup.env.ledger().set_timestamp(3601);
-    let res = setup.client.try_contribute(&user1, &setup.token_admin, &100);
+    let res = setup
+        .client
+        .try_contribute(&user1, &setup.token_admin, &100);
     assert_eq!(res.unwrap_err().unwrap(), Error::RoundDeadlinePassed.into());
 }
 
@@ -269,7 +273,10 @@ fn test_invalid_admin_order_validation() {
             member_goals: None,
         },
     );
-    assert_eq!(res.unwrap_err().unwrap(), Error::CustomOrderLengthMismatch.into());
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        Error::CustomOrderLengthMismatch.into()
+    );
 }
 
 #[test]
@@ -873,7 +880,10 @@ fn test_add_member_mid_round_panics() {
 
     // Attempt to add a member mid-round — must panic
     let res = client.try_add_member(&new_member);
-    assert_eq!(res.unwrap_err().unwrap(), Error::CannotChangeMidRound.into());
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        Error::CannotChangeMidRound.into()
+    );
 }
 
 #[test]
@@ -972,7 +982,10 @@ fn test_remove_member_mid_round_panics() {
 
     // Attempt to remove a member mid-round — must panic
     let res = client.try_remove_member(&u2);
-    assert_eq!(res.unwrap_err().unwrap(), Error::CannotChangeMidRound.into());
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        Error::CannotChangeMidRound.into()
+    );
 }
 
 #[test]
@@ -1790,7 +1803,10 @@ fn test_exit_request_rejected_mid_round() {
 
     // u1 tries to exit mid-round → should panic
     let res = client.try_request_emergency_exit(&u1);
-    assert_eq!(res.unwrap_err().unwrap(), Error::ExitNotAllowedMidRound.into());
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        Error::ExitNotAllowedMidRound.into()
+    );
 }
 
 // ---------------------------------------------------------------
@@ -2359,7 +2375,10 @@ fn test_overpayment_rejected() {
     // u1 has already paid 60, tries to pay 60 more (would total 120 > 100)
     client.contribute(&u1, &token_admin, &60);
     let res = client.try_contribute(&u1, &token_admin, &60); // should error
-    assert_eq!(res.unwrap_err().unwrap(), Error::ExceedsRemainingContribution.into());
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        Error::ExceedsRemainingContribution.into()
+    );
 }
 
 #[test]
@@ -2908,7 +2927,10 @@ fn test_cannot_vote_after_deadline() {
     // Deadline is at 100 + 3600 = 3700, try to vote at 3701
     setup.env.ledger().set_timestamp(3701);
     let res = setup.client.try_vote_on_proposal(&user1, &0, &true);
-    assert_eq!(res.unwrap_err().unwrap(), Error::VotingDeadlinePassed.into());
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        Error::VotingDeadlinePassed.into()
+    );
 }
 
 #[test]
@@ -3243,7 +3265,7 @@ fn test_admin_transfer_emits_events() {
     client.accept_admin_role();
     assert_eq!(client.get_admin(), new_admin);
     assert_eq!(client.get_proposed_admin(), None);
-    
+
     // Events are emitted but not checked here as the event API is tested elsewhere
 }
 
@@ -3312,9 +3334,15 @@ fn test_fuzz_like_member_operations_100_cases() {
     let mut seed: u64 = 0x73CA73;
 
     for _ in 0..100 {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let amount = ((seed % 100) as i128) + 1;
-        let actor = if seed & 1 == 0 { u1.clone() } else { u2.clone() };
+        let actor = if seed & 1 == 0 {
+            u1.clone()
+        } else {
+            u2.clone()
+        };
         let _ = client.try_contribute(&actor, &token, &amount);
     }
 

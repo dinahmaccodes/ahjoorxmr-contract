@@ -141,53 +141,53 @@ pub struct Proposal {
 #[contracttype]
 pub enum DataKey {
     // --- Instance ---
-    Admin,               // Address
-    Members,             // Vec<Address>
-    PayoutOrder,         // Vec<Address>
-    Strategy,            // PayoutStrategy
-    ContributionAmt,     // i128
-    Token,               // Address
-    CurrentRound,        // u32
-    PaidMembers,         // Vec<Address>
-    RoundDuration,       // u64
-    RoundDeadline,       // u64
-    Defaulters,          // Vec<Address>
-    PenaltyAmount,       // i128
-    DefaultCount,        // Map<Address, u32>
-    SuspendedMembers,    // Vec<Address>
-    ApprovedTokens,      // Vec<Address>
-    RewardPool,          // i128
-    TotalParticipations, // u32
-    MemberParticipation, // Map<Address, u32>
-    ClaimedRewards,      // Map<Address, i128>
-    RewardWeights,       // Map<Address, u32>
-    RewardDistType,      // DistributionType
-    ExitedMembers,       // Vec<Address>
-    ExitPenaltyBps,      // u32 (basis points, e.g. 1000 = 10%)
-    Paused,              // bool (global pause alias)
-    IsPaused,            // bool
-    PauseReason,         // String
-    PauseTimestamp,      // u64
-    CollectiveGoal,      // i128
-    TotalCollected,      // i128
-    MemberGoals,         // Map<Address, i128>
-    MemberCollected,     // Map<Address, i128>
-    MilestonesReached,   // Vec<u32> (e.g. 25, 50, 75, 100)
-    ExchangeRates,       // Map<Address, i128>
-    TokenLimits,         // Map<Address, i128>
-    ProposalCounter,     // u32
-    Proposals,           // Map<u32, Proposal>
-    ProposalVotes,       // Map<u32, Map<Address, bool>>
-    VotingDeadline,      // u64
-    QuorumPercentage,    // u32 (e.g., 51 for 51%)
-    MemberContributions, // Map<Address, i128> cumulative per round
-    ProposedAdmin,       // Address — proposed new admin (pending acceptance)
-    ContractVersion,     // u32
+    Admin,                   // Address
+    Members,                 // Vec<Address>
+    PayoutOrder,             // Vec<Address>
+    Strategy,                // PayoutStrategy
+    ContributionAmt,         // i128
+    Token,                   // Address
+    CurrentRound,            // u32
+    PaidMembers,             // Vec<Address>
+    RoundDuration,           // u64
+    RoundDeadline,           // u64
+    Defaulters,              // Vec<Address>
+    PenaltyAmount,           // i128
+    DefaultCount,            // Map<Address, u32>
+    SuspendedMembers,        // Vec<Address>
+    ApprovedTokens,          // Vec<Address>
+    RewardPool,              // i128
+    TotalParticipations,     // u32
+    MemberParticipation,     // Map<Address, u32>
+    ClaimedRewards,          // Map<Address, i128>
+    RewardWeights,           // Map<Address, u32>
+    RewardDistType,          // DistributionType
+    ExitedMembers,           // Vec<Address>
+    ExitPenaltyBps,          // u32 (basis points, e.g. 1000 = 10%)
+    Paused,                  // bool (global pause alias)
+    IsPaused,                // bool
+    PauseReason,             // String
+    PauseTimestamp,          // u64
+    CollectiveGoal,          // i128
+    TotalCollected,          // i128
+    MemberGoals,             // Map<Address, i128>
+    MemberCollected,         // Map<Address, i128>
+    MilestonesReached,       // Vec<u32> (e.g. 25, 50, 75, 100)
+    ExchangeRates,           // Map<Address, i128>
+    TokenLimits,             // Map<Address, i128>
+    ProposalCounter,         // u32
+    Proposals,               // Map<u32, Proposal>
+    ProposalVotes,           // Map<u32, Map<Address, bool>>
+    VotingDeadline,          // u64
+    QuorumPercentage,        // u32 (e.g., 51 for 51%)
+    MemberContributions,     // Map<Address, i128> cumulative per round
+    ProposedAdmin,           // Address — proposed new admin (pending acceptance)
+    ContractVersion,         // u32
     MigrationCompleted(u32), // bool
     // --- Persistent ---
-    RoundHistory,        // Vec<PayoutRecord> — grows every round
+    RoundHistory, // Vec<PayoutRecord> — grows every round
     // --- Temporary ---
-    ExitRequests,        // Map<Address, ExitRequest> — pending admin action
+    ExitRequests, // Map<Address, ExitRequest> — pending admin action
 }
 
 mod errors;
@@ -247,7 +247,9 @@ impl AhjoorContract {
         let member_count = members.len();
 
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::ContractVersion, &1u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &1u32);
         env.storage().instance().set(&DataKey::Members, &members);
         env.storage()
             .instance()
@@ -424,7 +426,9 @@ impl AhjoorContract {
             .get(&DataKey::Admin)
             .expect("Not initialized");
 
-        env.storage().instance().set(&DataKey::Admin, &proposed_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin, &proposed_admin);
         env.storage().instance().remove(&DataKey::ProposedAdmin);
 
         events::emit_admin_transferred(&env, old_admin, proposed_admin);
@@ -1480,8 +1484,6 @@ impl AhjoorContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
-
-
     // --- READ INTERFACE ---
 
     pub fn get_group_info(env: Env) -> GroupInfo {
@@ -1516,69 +1518,69 @@ impl AhjoorContract {
         }
     }
 
-pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
-    let members: Vec<Address> = env
-        .storage()
-        .instance()
-        .get(&DataKey::Members)
-        .unwrap_or(Vec::new(&env));
-    let is_member = members.contains(&member);
+    pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .unwrap_or(Vec::new(&env));
+        let is_member = members.contains(&member);
 
-    let suspended_members: Vec<Address> = env
-        .storage()
-        .instance()
-        .get(&DataKey::SuspendedMembers)
-        .unwrap_or(Vec::new(&env));
-    let is_suspended = suspended_members.contains(&member);
+        let suspended_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SuspendedMembers)
+            .unwrap_or(Vec::new(&env));
+        let is_suspended = suspended_members.contains(&member);
 
-    let exited_members: Vec<Address> = env
-        .storage()
-        .instance()
-        .get(&DataKey::ExitedMembers)
-        .unwrap_or(Vec::new(&env));
-    let is_exited = exited_members.contains(&member);
+        let exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env));
+        let is_exited = exited_members.contains(&member);
 
-    let member_contributions: Map<Address, i128> = env
-        .storage()
-        .instance()
-        .get(&DataKey::MemberContributions)
-        .unwrap_or(Map::new(&env));
-    let contributions_this_round = member_contributions.get(member.clone()).unwrap_or(0);
+        let member_contributions: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MemberContributions)
+            .unwrap_or(Map::new(&env));
+        let contributions_this_round = member_contributions.get(member.clone()).unwrap_or(0);
 
-    let paid_members: Vec<Address> = env
-        .storage()
-        .instance()
-        .get(&DataKey::PaidMembers)
-        .unwrap_or(Vec::new(&env));
-    let has_paid_this_round = paid_members.contains(&member);
+        let paid_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaidMembers)
+            .unwrap_or(Vec::new(&env));
+        let has_paid_this_round = paid_members.contains(&member);
 
-    let default_count_map: Map<Address, u32> = env
-        .storage()
-        .instance()
-        .get(&DataKey::DefaultCount)
-        .unwrap_or(Map::new(&env));
-    let default_count = default_count_map.get(member.clone()).unwrap_or(0);
+        let default_count_map: Map<Address, u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::DefaultCount)
+            .unwrap_or(Map::new(&env));
+        let default_count = default_count_map.get(member.clone()).unwrap_or(0);
 
-    let member_collected: Map<Address, i128> = env
-        .storage()
-        .instance()
-        .get(&DataKey::MemberCollected)
-        .unwrap_or(Map::new(&env));
-    let lifetime_contributions = member_collected.get(member.clone()).unwrap_or(0);
+        let member_collected: Map<Address, i128> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MemberCollected)
+            .unwrap_or(Map::new(&env));
+        let lifetime_contributions = member_collected.get(member.clone()).unwrap_or(0);
 
-    let claimable_rewards = Self::get_claimable_reward(env.clone(), member.clone());
+        let claimable_rewards = Self::get_claimable_reward(env.clone(), member.clone());
 
-    MemberStatus {
-        is_member,
-        is_suspended,
-        is_exited,
-        contributions_this_round,
-        has_paid_this_round,
-        default_count,
-        lifetime_contributions,
-        claimable_rewards,
+        MemberStatus {
+            is_member,
+            is_suspended,
+            is_exited,
+            contributions_this_round,
+            has_paid_this_round,
+            default_count,
+            lifetime_contributions,
+            claimable_rewards,
+        }
     }
-}
 
     /// Returns `(amount_contributed_so_far, amount_remaining)` for `member`
     /// in the current round.
@@ -2002,7 +2004,9 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             approved: false,
         };
         requests.set(member.clone(), request);
-        env.storage().temporary().set(&DataKey::ExitRequests, &requests);
+        env.storage()
+            .temporary()
+            .set(&DataKey::ExitRequests, &requests);
         env.storage().temporary().extend_ttl(
             &DataKey::ExitRequests,
             TEMP_LIFETIME_THRESHOLD,
@@ -2073,7 +2077,9 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .set(&DataKey::ExitedMembers, &exited_members);
 
         requests.remove(member.clone());
-        env.storage().temporary().set(&DataKey::ExitRequests, &requests);
+        env.storage()
+            .temporary()
+            .set(&DataKey::ExitRequests, &requests);
 
         events::emit_exit_ok(&env, member.clone(), request.refund_amount);
 
@@ -2101,7 +2107,9 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
         }
 
         requests.remove(member.clone());
-        env.storage().temporary().set(&DataKey::ExitRequests, &requests);
+        env.storage()
+            .temporary()
+            .set(&DataKey::ExitRequests, &requests);
 
         events::emit_exit_no(&env, member.clone());
 
@@ -2123,7 +2131,6 @@ pub fn get_member_status(env: Env, member: Address) -> MemberStatus {
             .get(&DataKey::ExitedMembers)
             .unwrap_or(Vec::new(&env))
     }
-
 }
 mod test;
 pub use events::*;

@@ -199,7 +199,9 @@ impl AhjoorPaymentsContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeTimeout, &DEFAULT_DISPUTE_TIMEOUT);
-        env.storage().instance().set(&DataKey::ContractVersion, &1u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &1u32);
         env.storage().instance().set(&DataKey::Paused, &false);
 
         env.storage()
@@ -1449,7 +1451,10 @@ impl AhjoorPaymentsContract {
     }
 
     pub fn is_paused(env: Env) -> bool {
-        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
     pub fn get_pause_reason(env: Env) -> String {
@@ -1462,7 +1467,12 @@ impl AhjoorPaymentsContract {
     // --- Internal Helpers ---
 
     fn require_not_paused(env: &Env) {
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             panic!("Contract is paused");
         }
     }
@@ -1539,7 +1549,12 @@ impl AhjoorPaymentsContract {
     }
 
     /// Append payment_id to the merchant+reference index (#67).
-    fn index_payment_by_reference(env: &Env, merchant: &Address, reference: &String, payment_id: u32) {
+    fn index_payment_by_reference(
+        env: &Env,
+        merchant: &Address,
+        reference: &String,
+        payment_id: u32,
+    ) {
         let hash = Self::reference_hash(env, reference);
         let key = DataKey::MerchantReference(merchant.clone(), hash);
         let mut ids: Vec<u32> = env

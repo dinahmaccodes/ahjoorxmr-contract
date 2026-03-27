@@ -136,7 +136,12 @@ pub fn emit_escrow_disputed(e: &Env, escrow_id: u32, disputer: Address, reason: 
     .publish(e);
 }
 
-pub fn emit_dispute_resolved(e: &Env, escrow_id: u32, release_to_seller: bool, resolved_by: Address) {
+pub fn emit_dispute_resolved(
+    e: &Env,
+    escrow_id: u32,
+    release_to_seller: bool,
+    resolved_by: Address,
+) {
     DisputeResolved {
         escrow_id,
         release_to_seller,

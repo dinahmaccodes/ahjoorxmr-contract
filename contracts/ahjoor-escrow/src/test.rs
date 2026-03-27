@@ -62,14 +62,9 @@ fn test_create_escrow() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     assert_eq!(escrow_id, 0);
     assert_eq!(s.token_client.balance(&buyer), 750);
@@ -94,7 +89,8 @@ fn test_create_escrow_zero_amount_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    s.client.create_escrow(&buyer, &seller, &arbiter, &0, &s.token_addr, &deadline);
+    s.client
+        .create_escrow(&buyer, &seller, &arbiter, &0, &s.token_addr, &deadline);
 }
 
 #[test]
@@ -108,7 +104,8 @@ fn test_create_escrow_past_deadline_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp();
-    s.client.create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+    s.client
+        .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 }
 
 // ===========================================================================
@@ -125,14 +122,9 @@ fn test_release_escrow_by_buyer() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     s.client.release_escrow(&buyer, &escrow_id);
 
@@ -152,14 +144,9 @@ fn test_release_escrow_by_arbiter() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     s.client.release_escrow(&arbiter, &escrow_id);
 
@@ -179,14 +166,9 @@ fn test_release_escrow_by_seller_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     s.client.release_escrow(&seller, &escrow_id);
 }
@@ -202,14 +184,9 @@ fn test_release_escrow_already_released_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     s.client.release_escrow(&buyer, &escrow_id);
     s.client.release_escrow(&buyer, &escrow_id); // Should panic
@@ -229,16 +206,15 @@ fn test_dispute_escrow_by_buyer() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client.dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Item not received"));
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Item not received"),
+    );
 
     let escrow = s.client.get_escrow(&escrow_id);
     assert_eq!(escrow.status, EscrowStatus::Disputed);
@@ -257,16 +233,15 @@ fn test_dispute_escrow_by_seller() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client.dispute_escrow(&seller, &escrow_id, &String::from_str(&s.env, "Payment not received"));
+    s.client.dispute_escrow(
+        &seller,
+        &escrow_id,
+        &String::from_str(&s.env, "Payment not received"),
+    );
 
     let escrow = s.client.get_escrow(&escrow_id);
     assert_eq!(escrow.status, EscrowStatus::Disputed);
@@ -283,16 +258,12 @@ fn test_dispute_escrow_by_arbiter_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client.dispute_escrow(&arbiter, &escrow_id, &String::from_str(&s.env, "Invalid"));
+    s.client
+        .dispute_escrow(&arbiter, &escrow_id, &String::from_str(&s.env, "Invalid"));
 }
 
 // ===========================================================================
@@ -309,16 +280,15 @@ fn test_resolve_dispute_to_seller() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client.dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Item not received"));
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Item not received"),
+    );
     s.client.resolve_dispute(&arbiter, &escrow_id, &true);
 
     let escrow = s.client.get_escrow(&escrow_id);
@@ -340,16 +310,15 @@ fn test_resolve_dispute_to_buyer() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client.dispute_escrow(&seller, &escrow_id, &String::from_str(&s.env, "Payment not received"));
+    s.client.dispute_escrow(
+        &seller,
+        &escrow_id,
+        &String::from_str(&s.env, "Payment not received"),
+    );
     s.client.resolve_dispute(&arbiter, &escrow_id, &false);
 
     let escrow = s.client.get_escrow(&escrow_id);
@@ -369,16 +338,15 @@ fn test_resolve_dispute_by_buyer_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client.dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Item not received"));
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Item not received"),
+    );
     s.client.resolve_dispute(&buyer, &escrow_id, &true);
 }
 
@@ -396,14 +364,9 @@ fn test_auto_release_expired() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     // Advance time past deadline
     s.env.ledger().set_timestamp(deadline + 1);
@@ -427,14 +390,9 @@ fn test_auto_release_not_expired_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     s.client.auto_release_expired(&escrow_id);
 }
@@ -450,16 +408,15 @@ fn test_auto_release_disputed_panics() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client.dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Item not received"));
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Item not received"),
+    );
 
     // Advance time past deadline
     s.env.ledger().set_timestamp(deadline + 1);
@@ -481,7 +438,8 @@ fn test_escrow_created_emits_event() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    s.client.create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+    s.client
+        .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     let events = s.env.events().all();
     assert!(events.len() > 0);
@@ -497,14 +455,9 @@ fn test_escrow_released_emits_event() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &250,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     s.client.release_escrow(&buyer, &escrow_id);
 
@@ -527,8 +480,10 @@ fn test_escrow_counter_increments() {
 
     let deadline = s.env.ledger().timestamp() + 1000;
 
-    s.client.create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
-    s.client.create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+    s.client
+        .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+    s.client
+        .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
 
     assert_eq!(s.client.get_escrow_counter(), 2);
 }
@@ -612,9 +567,14 @@ fn test_deadline_extension_two_party_flow() {
     s.token_admin_client.mint(&buyer, &1);
 
     let deadline = s.env.ledger().timestamp() + 10;
-    let result = s
-        .client
-        .try_create_escrow(&buyer, &seller, &arbiter, &i128::MAX, &s.token_addr, &deadline);
+    let result = s.client.try_create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &i128::MAX,
+        &s.token_addr,
+        &deadline,
+    );
     assert!(result.is_err());
 }
 
@@ -746,9 +706,9 @@ fn test_write_functions_blocked_when_paused_reads_still_work() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 500;
-    let escrow_id = s
-        .client
-        .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
 
     s.client
         .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "snapshot"));
@@ -772,9 +732,14 @@ fn test_fuzz_like_create_inputs_100_cases() {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         let amount = ((seed % 5000) as i128) + 1;
         let deadline = s.env.ledger().timestamp() + 1 + (seed % 1000);
-        let _ = s
-            .client
-            .try_create_escrow(&buyer, &seller, &arbiter, &amount, &s.token_addr, &deadline);
+        let _ = s.client.try_create_escrow(
+            &buyer,
+            &seller,
+            &arbiter,
+            &amount,
+            &s.token_addr,
+            &deadline,
+        );
     }
 
     assert!(s.client.get_escrow_counter() <= 100);
@@ -875,7 +840,9 @@ fn test_deadline_extension_proposal_expiry_rejected() {
     s.client
         .propose_deadline_extension(&buyer, &escrow_id, &extended_deadline);
 
-    s.env.ledger().set_timestamp(s.env.ledger().timestamp() + 24 * 60 * 60 + 1);
+    s.env
+        .ledger()
+        .set_timestamp(s.env.ledger().timestamp() + 24 * 60 * 60 + 1);
 
     let result = s.client.try_accept_deadline_extension(&seller, &escrow_id);
     assert!(result.is_err());
@@ -906,11 +873,9 @@ fn test_dispute_blocks_deadline_extension() {
     s.client
         .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Need review"));
 
-    let result = s.client.try_propose_deadline_extension(
-        &buyer,
-        &escrow_id,
-        &(initial_deadline + 3600),
-    );
+    let result =
+        s.client
+            .try_propose_deadline_extension(&buyer, &escrow_id, &(initial_deadline + 3600));
     assert!(result.is_err());
 }
 
@@ -925,21 +890,16 @@ fn test_recovery_after_resume() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let deadline = s.env.ledger().timestamp() + 1000;
-    let escrow_id = s.client.create_escrow(
-        &buyer,
-        &seller,
-        &arbiter,
-        &100,
-        &s.token_addr,
-        &deadline,
-    );
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
 
     s.client
         .pause_contract(&admin, &String::from_str(&s.env, "Emergency"));
 
-    let create_res = s
-        .client
-        .try_create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+    let create_res =
+        s.client
+            .try_create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
     assert!(create_res.is_err());
 
     let release_res = s.client.try_release_escrow(&buyer, &escrow_id);

@@ -1,7 +1,5 @@
 #![no_std]
-use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, BytesN, Env, String,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, String};
 
 // --- Storage TTL Constants ---
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_000;
@@ -80,9 +78,13 @@ impl AhjoorEscrowContract {
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::ContractVersion, &1u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &1u32);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Create a new escrow. Funds are transferred from buyer to contract.
@@ -124,7 +126,9 @@ impl AhjoorEscrowContract {
             deadline,
         };
 
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
         env.storage().persistent().extend_ttl(
             &DataKey::Escrow(escrow_id),
             PERSISTENT_LIFETIME_THRESHOLD,
@@ -132,17 +136,12 @@ impl AhjoorEscrowContract {
         );
 
         events::emit_escrow_created(
-            &env,
-            escrow_id,
-            buyer,
-            seller,
-            arbiter,
-            amount,
-            token,
-            deadline,
+            &env, escrow_id, buyer, seller, arbiter, amount, token, deadline,
         );
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
         escrow_id
     }
@@ -167,11 +166,17 @@ impl AhjoorEscrowContract {
         }
 
         let client = token::Client::new(&env, &escrow.token);
-        client.transfer(&env.current_contract_address(), &escrow.seller, &escrow.amount);
+        client.transfer(
+            &env.current_contract_address(),
+            &escrow.seller,
+            &escrow.amount,
+        );
 
         escrow.status = EscrowStatus::Released;
 
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
         env.storage().persistent().extend_ttl(
             &DataKey::Escrow(escrow_id),
             PERSISTENT_LIFETIME_THRESHOLD,
@@ -180,7 +185,9 @@ impl AhjoorEscrowContract {
 
         events::emit_escrow_released(&env, escrow_id, escrow.seller, escrow.amount);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Dispute an escrow. Can be called by buyer or seller.
@@ -204,7 +211,9 @@ impl AhjoorEscrowContract {
 
         escrow.status = EscrowStatus::Disputed;
 
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
         env.storage().persistent().extend_ttl(
             &DataKey::Escrow(escrow_id),
             PERSISTENT_LIFETIME_THRESHOLD,
@@ -217,7 +226,9 @@ impl AhjoorEscrowContract {
             created_at: env.ledger().timestamp(),
             resolved: false,
         };
-        env.storage().persistent().set(&DataKey::Dispute(escrow_id), &dispute);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(escrow_id), &dispute);
         env.storage().persistent().extend_ttl(
             &DataKey::Dispute(escrow_id),
             PERSISTENT_LIFETIME_THRESHOLD,
@@ -226,7 +237,9 @@ impl AhjoorEscrowContract {
 
         events::emit_escrow_disputed(&env, escrow_id, caller, reason);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Resolve a dispute. Only arbiter can call this.
@@ -251,14 +264,24 @@ impl AhjoorEscrowContract {
         let client = token::Client::new(&env, &escrow.token);
 
         if release_to_seller {
-            client.transfer(&env.current_contract_address(), &escrow.seller, &escrow.amount);
+            client.transfer(
+                &env.current_contract_address(),
+                &escrow.seller,
+                &escrow.amount,
+            );
             escrow.status = EscrowStatus::Released;
         } else {
-            client.transfer(&env.current_contract_address(), &escrow.buyer, &escrow.amount);
+            client.transfer(
+                &env.current_contract_address(),
+                &escrow.buyer,
+                &escrow.amount,
+            );
             escrow.status = EscrowStatus::Refunded;
         }
 
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
         env.storage().persistent().extend_ttl(
             &DataKey::Escrow(escrow_id),
             PERSISTENT_LIFETIME_THRESHOLD,
@@ -272,12 +295,16 @@ impl AhjoorEscrowContract {
             .get::<DataKey, Dispute>(&DataKey::Dispute(escrow_id))
         {
             dispute.resolved = true;
-            env.storage().persistent().set(&DataKey::Dispute(escrow_id), &dispute);
+            env.storage()
+                .persistent()
+                .set(&DataKey::Dispute(escrow_id), &dispute);
         }
 
         events::emit_dispute_resolved(&env, escrow_id, release_to_seller, arbiter);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Auto-release expired escrow (past deadline, undisputed). Can be called by buyer.
@@ -300,11 +327,17 @@ impl AhjoorEscrowContract {
         escrow.buyer.require_auth();
 
         let client = token::Client::new(&env, &escrow.token);
-        client.transfer(&env.current_contract_address(), &escrow.buyer, &escrow.amount);
+        client.transfer(
+            &env.current_contract_address(),
+            &escrow.buyer,
+            &escrow.amount,
+        );
 
         escrow.status = EscrowStatus::Refunded;
 
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
         env.storage().persistent().extend_ttl(
             &DataKey::Escrow(escrow_id),
             PERSISTENT_LIFETIME_THRESHOLD,
@@ -313,12 +346,19 @@ impl AhjoorEscrowContract {
 
         events::emit_escrow_refunded(&env, escrow_id, escrow.buyer, escrow.amount);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Propose a new deadline for an active escrow.
     /// Only buyer or seller may propose and the proposal requires counterparty acceptance.
-    pub fn propose_deadline_extension(env: Env, caller: Address, escrow_id: u32, new_deadline: u64) {
+    pub fn propose_deadline_extension(
+        env: Env,
+        caller: Address,
+        escrow_id: u32,
+        new_deadline: u64,
+    ) {
         caller.require_auth();
 
         let escrow: Escrow = env
@@ -362,7 +402,9 @@ impl AhjoorEscrowContract {
             proposal.proposed_at,
         );
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Accept a pending deadline extension proposed by the counterparty.
@@ -411,7 +453,9 @@ impl AhjoorEscrowContract {
         let old_deadline = escrow.deadline;
         escrow.deadline = proposal.new_deadline;
 
-        env.storage().persistent().set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
         env.storage().persistent().extend_ttl(
             &DataKey::Escrow(escrow_id),
             PERSISTENT_LIFETIME_THRESHOLD,
@@ -423,7 +467,9 @@ impl AhjoorEscrowContract {
 
         events::emit_deadline_extended(&env, escrow_id, old_deadline, escrow.deadline);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Get escrow details
@@ -444,7 +490,10 @@ impl AhjoorEscrowContract {
 
     /// Get escrow counter
     pub fn get_escrow_counter(env: Env) -> u32 {
-        env.storage().instance().get(&DataKey::EscrowCounter).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&DataKey::EscrowCounter)
+            .unwrap_or(0)
     }
 
     /// Upgrade this contract's WASM code. Admin only.
@@ -470,7 +519,9 @@ impl AhjoorEscrowContract {
 
         events::emit_contract_upgraded(&env, old_version, new_version, admin);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Run one-time migration logic for the current version. Admin only.
@@ -500,7 +551,9 @@ impl AhjoorEscrowContract {
             .instance()
             .set(&DataKey::MigrationCompleted(version), &true);
 
-        env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Returns the current contract version.
@@ -535,7 +588,10 @@ impl AhjoorEscrowContract {
     }
 
     pub fn is_paused(env: Env) -> bool {
-        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
     pub fn get_pause_reason(env: Env) -> String {
@@ -548,14 +604,23 @@ impl AhjoorEscrowContract {
     // --- Internal Helpers ---
 
     fn require_not_paused(env: &Env) {
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             panic!("Contract is paused");
         }
     }
 
     fn require_or_bootstrap_admin(env: &Env, admin: &Address) {
         admin.require_auth();
-        if let Some(stored_admin) = env.storage().instance().get::<DataKey, Address>(&DataKey::Admin) {
+        if let Some(stored_admin) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::Admin)
+        {
             if stored_admin != *admin {
                 panic!("Only admin can pause contract");
             }
@@ -584,7 +649,9 @@ impl AhjoorEscrowContract {
             .unwrap_or(0);
         let id = counter;
         counter += 1;
-        env.storage().instance().set(&DataKey::EscrowCounter, &counter);
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowCounter, &counter);
         id
     }
 

@@ -502,7 +502,11 @@ pub fn emit_admin_transfer_proposed(e: &Env, current_admin: Address, proposed_ad
 }
 
 pub fn emit_admin_transferred(e: &Env, old_admin: Address, new_admin: Address) {
-    AdminTransferred { old_admin, new_admin }.publish(e);
+    AdminTransferred {
+        old_admin,
+        new_admin,
+    }
+    .publish(e);
 }
 
 pub fn emit_contract_upgraded(e: &Env, old_version: u32, new_version: u32, by_admin: Address) {
