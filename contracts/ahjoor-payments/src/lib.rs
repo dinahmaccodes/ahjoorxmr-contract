@@ -1,7 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, BytesN, Env, Map,
-    String, Vec,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Vec,
 };
 
 /// Maximum length (bytes) for the optional payment reference string.
@@ -171,10 +170,6 @@ pub enum DataKey {
     Subscription(u32),
     /// Index: (merchant, reference_hash) → Vec<u32> of payment IDs
     MerchantReference(Address, u32),
-    /// Persistent: sha256 receipt hash for a completed payment (#65)
-    /// Hash inputs (big-endian): payment_id(u32) || customer(Address) || merchant(Address)
-    ///                           || amount(i128) || token(Address) || completed_at(u64)
-    PaymentReceipt(u32),
     // --- Temporary ---
     Dispute(u32),
 }
@@ -429,7 +424,6 @@ impl AhjoorPaymentsContract {
 
         let old_status = payment.status;
         payment.status = PaymentStatus::Completed;
-        let completed_at = env.ledger().timestamp();
 
         // Extend TTL on update so completed records survive long-term
         env.storage()
@@ -441,29 +435,8 @@ impl AhjoorPaymentsContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
-        // Compute and store receipt hash (#65)
-        // sha256(payment_id || customer || merchant || amount || token || completed_at)
-        let receipt_hash = Self::compute_receipt_hash(
-            &env,
-            payment_id,
-            &payment.customer,
-            &payment.merchant,
-            payment.amount,
-            &payment.token,
-            completed_at,
-        );
-        env.storage()
-            .persistent()
-            .set(&DataKey::PaymentReceipt(payment_id), &receipt_hash);
-        env.storage().persistent().extend_ttl(
-            &DataKey::PaymentReceipt(payment_id),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-
         events::emit_payment_completed(&env, payment_id, payment.merchant, payment.amount);
         events::emit_payment_status_changed(&env, payment_id, old_status, PaymentStatus::Completed);
-        events::emit_payment_receipt_issued(&env, payment_id, receipt_hash);
 
         env.storage()
             .instance()
@@ -1067,24 +1040,6 @@ impl AhjoorPaymentsContract {
             .expect("Payment not found")
     }
 
-    /// Returns the 32-byte sha256 receipt hash for a completed payment (#65).
-    /// Hash inputs (big-endian): payment_id || customer || merchant || amount || token || completed_at
-    pub fn get_payment_receipt(env: Env, payment_id: u32) -> BytesN<32> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::PaymentReceipt(payment_id))
-            .expect("Receipt not found")
-    }
-
-    /// Returns true if the stored receipt hash matches `expected_hash` (#65).
-    pub fn verify_payment(env: Env, payment_id: u32, expected_hash: BytesN<32>) -> bool {
-        env.storage()
-            .persistent()
-            .get::<DataKey, BytesN<32>>(&DataKey::PaymentReceipt(payment_id))
-            .map(|stored| stored == expected_hash)
-            .unwrap_or(false)
-    }
-
     /// Look up all payment IDs for a merchant+reference pair (#67).
     pub fn get_payments_by_reference(env: Env, merchant: Address, reference: String) -> Vec<u32> {
         let hash = Self::reference_hash(&env, &reference);
@@ -1614,27 +1569,6 @@ impl AhjoorPaymentsContract {
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
-    }
-
-    /// Compute sha256(payment_id || customer || merchant || amount || token || completed_at).
-    /// All integers encoded big-endian. Addresses encoded as their raw bytes.
-    fn compute_receipt_hash(
-        env: &Env,
-        payment_id: u32,
-        customer: &Address,
-        merchant: &Address,
-        amount: i128,
-        token: &Address,
-        completed_at: u64,
-    ) -> BytesN<32> {
-        let mut preimage = Bytes::new(env);
-        preimage.extend_from_array(&payment_id.to_be_bytes());
-        preimage.append(&customer.to_xdr(env));
-        preimage.append(&merchant.to_xdr(env));
-        preimage.extend_from_array(&amount.to_be_bytes());
-        preimage.append(&token.to_xdr(env));
-        preimage.extend_from_array(&completed_at.to_be_bytes());
-        env.crypto().sha256(&preimage).into()
     }
 
     fn next_payment_id(env: &Env) -> u32 {

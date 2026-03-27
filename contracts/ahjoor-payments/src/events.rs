@@ -1,13 +1,5 @@
 use crate::PaymentStatus;
-use soroban_sdk::{contractevent, Address, BytesN, Env, String};
-
-/// Event: Payment receipt issued on completion (#65)
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct PaymentReceiptIssued {
-    pub payment_id: u32,
-    pub receipt_hash: BytesN<32>,
-}
+use soroban_sdk::{contractevent, Address, Env, String};
 
 /// Event: Multi-token payment created (customer paid in non-USDC token)
 #[contractevent]
@@ -253,14 +245,6 @@ pub fn emit_contract_paused(e: &Env, admin: Address, reason: String, timestamp: 
 
 pub fn emit_contract_resumed(e: &Env, admin: Address, timestamp: u64) {
     ContractResumed { admin, timestamp }.publish(e);
-}
-
-pub fn emit_payment_receipt_issued(e: &Env, payment_id: u32, receipt_hash: BytesN<32>) {
-    PaymentReceiptIssued {
-        payment_id,
-        receipt_hash,
-    }
-    .publish(e);
 }
 
 #[allow(clippy::too_many_arguments)]
