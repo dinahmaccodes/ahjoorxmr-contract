@@ -56,6 +56,8 @@ const DEFAULT_MAX_BATCH_SIZE: u32 = 20;
 const DEFAULT_DISPUTE_TIMEOUT: u64 = 7 * 24 * 60 * 60; // 7 days in seconds
 /// Reflector oracle price precision: prices are scaled by 10^7
 const ORACLE_PRICE_PRECISION: i128 = 10_000_000;
+/// Ledger sequences per weekly bucket (~7 days at 5s/ledger = 120_960 ledgers)
+const LEDGER_BUCKET_SIZE: u32 = 120_960;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -95,6 +97,28 @@ pub struct PaymentRequest {
     pub token: Address,
     pub reference: Option<String>,
     pub metadata: Option<Map<String, String>>,
+}
+
+/// Global protocol-wide aggregate statistics (#70).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GlobalStats {
+    pub total_payments_created: u32,
+    pub total_payments_completed: u32,
+    pub total_payments_refunded: u32,
+    pub total_payments_expired: u32,
+    pub total_volume_completed: Map<Address, i128>,
+    pub total_volume_refunded: Map<Address, i128>,
+}
+
+/// Per-merchant aggregate statistics (#70).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantStats {
+    pub payments_created: u32,
+    pub payments_completed: u32,
+    pub payments_refunded: u32,
+    pub volume_completed: Map<Address, i128>,
 }
 
 #[contracttype]
@@ -175,6 +199,12 @@ pub enum DataKey {
     /// Hash inputs (big-endian): payment_id(u32) || customer(Address) || merchant(Address)
     ///                           || amount(i128) || token(Address) || completed_at(u64)
     PaymentReceipt(u32),
+    /// Persistent: global aggregate statistics (#70)
+    GlobalStats,
+    /// Persistent: per-merchant aggregate statistics (#70)
+    MerchantStats(Address),
+    /// Persistent: weekly volume bucket — (token, bucket_id) → total completed volume (#70)
+    VolumeBucket(Address, u32),
     // --- Temporary ---
     Dispute(u32),
 }
@@ -285,6 +315,10 @@ impl AhjoorPaymentsContract {
             Self::index_payment_by_reference(&env, &merchant, r, payment_id);
         }
 
+        // Update stats (#70)
+        Self::inc_global_created(&env);
+        Self::inc_merchant_created(&env, &merchant);
+
         events::emit_payment_created(&env, payment_id, customer, merchant, amount, token);
 
         env.storage()
@@ -372,6 +406,10 @@ impl AhjoorPaymentsContract {
             if let Some(ref r) = request.reference {
                 Self::index_payment_by_reference(&env, &request.merchant, r, payment_id);
             }
+
+            // Update stats (#70)
+            Self::inc_global_created(&env);
+            Self::inc_merchant_created(&env, &request.merchant);
 
             events::emit_payment_created(
                 &env,
@@ -461,9 +499,14 @@ impl AhjoorPaymentsContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
-        events::emit_payment_completed(&env, payment_id, payment.merchant, payment.amount);
+        events::emit_payment_completed(&env, payment_id, payment.merchant.clone(), payment.amount);
         events::emit_payment_status_changed(&env, payment_id, old_status, PaymentStatus::Completed);
         events::emit_payment_receipt_issued(&env, payment_id, receipt_hash);
+
+        // Update stats (#70)
+        Self::inc_global_completed(&env, &payment.token, payment.amount);
+        Self::inc_merchant_completed(&env, &payment.merchant, &payment.token, payment.amount);
+        Self::inc_volume_bucket(&env, &payment.token, payment.amount);
 
         env.storage()
             .instance()
@@ -587,6 +630,12 @@ impl AhjoorPaymentsContract {
                 .temporary()
                 .set(&DataKey::Dispute(payment_id), &dispute);
             // No TTL extension — resolved disputes can expire on their own
+        }
+
+        // Update stats (#70)
+        if !release_to_merchant {
+            Self::inc_global_refunded(&env, &payment.token, payment.amount);
+            Self::inc_merchant_refunded(&env, &payment.merchant, &payment.token, payment.amount);
         }
 
         events::emit_dispute_resolved(&env, payment_id, release_to_merchant, admin);
@@ -1060,6 +1109,43 @@ impl AhjoorPaymentsContract {
 
     // --- Read Interface ---
 
+    /// Returns global aggregate statistics (#70).
+    pub fn get_stats(env: Env) -> GlobalStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::GlobalStats)
+            .unwrap_or(GlobalStats {
+                total_payments_created: 0,
+                total_payments_completed: 0,
+                total_payments_refunded: 0,
+                total_payments_expired: 0,
+                total_volume_completed: Map::new(&env),
+                total_volume_refunded: Map::new(&env),
+            })
+    }
+
+    /// Returns per-merchant aggregate statistics (#70).
+    pub fn get_merchant_stats(env: Env, merchant: Address) -> MerchantStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MerchantStats(merchant))
+            .unwrap_or(MerchantStats {
+                payments_created: 0,
+                payments_completed: 0,
+                payments_refunded: 0,
+                volume_completed: Map::new(&env),
+            })
+    }
+
+    /// Returns the completed volume for a token in the current weekly ledger bucket (#70).
+    pub fn get_weekly_volume(env: Env, token: Address) -> i128 {
+        let bucket = env.ledger().sequence() / LEDGER_BUCKET_SIZE;
+        env.storage()
+            .persistent()
+            .get(&DataKey::VolumeBucket(token, bucket))
+            .unwrap_or(0)
+    }
+
     pub fn get_payment(env: Env, payment_id: u32) -> Payment {
         env.storage()
             .persistent()
@@ -1205,6 +1291,9 @@ impl AhjoorPaymentsContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
+        // Update stats (#70)
+        Self::inc_global_expired(&env);
+
         events::emit_payment_status_changed(&env, payment_id, old_status, PaymentStatus::Expired);
         env.storage()
             .instance()
@@ -1256,6 +1345,10 @@ impl AhjoorPaymentsContract {
         if payment.refunded_amount >= payment.amount {
             payment.status = PaymentStatus::Refunded;
         }
+
+        // Update stats (#70) — count each partial refund call
+        Self::inc_global_refunded(&env, &payment.token, refund_amount);
+        Self::inc_merchant_refunded(&env, &payment.merchant, &payment.token, refund_amount);
 
         env.storage()
             .persistent()
@@ -1635,6 +1728,114 @@ impl AhjoorPaymentsContract {
         preimage.append(&token.to_xdr(env));
         preimage.extend_from_array(&completed_at.to_be_bytes());
         env.crypto().sha256(&preimage).into()
+    }
+
+    // --- Stats Helpers (#70) ---
+
+    fn load_global_stats(env: &Env) -> GlobalStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::GlobalStats)
+            .unwrap_or(GlobalStats {
+                total_payments_created: 0,
+                total_payments_completed: 0,
+                total_payments_refunded: 0,
+                total_payments_expired: 0,
+                total_volume_completed: Map::new(env),
+                total_volume_refunded: Map::new(env),
+            })
+    }
+
+    fn save_global_stats(env: &Env, stats: &GlobalStats) {
+        env.storage().persistent().set(&DataKey::GlobalStats, stats);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GlobalStats,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+
+    fn load_merchant_stats(env: &Env, merchant: &Address) -> MerchantStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MerchantStats(merchant.clone()))
+            .unwrap_or(MerchantStats {
+                payments_created: 0,
+                payments_completed: 0,
+                payments_refunded: 0,
+                volume_completed: Map::new(env),
+            })
+    }
+
+    fn save_merchant_stats(env: &Env, merchant: &Address, stats: &MerchantStats) {
+        let key = DataKey::MerchantStats(merchant.clone());
+        env.storage().persistent().set(&key, stats);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+
+    fn inc_global_created(env: &Env) {
+        let mut s = Self::load_global_stats(env);
+        s.total_payments_created += 1;
+        Self::save_global_stats(env, &s);
+    }
+
+    fn inc_global_completed(env: &Env, token: &Address, amount: i128) {
+        let mut s = Self::load_global_stats(env);
+        s.total_payments_completed += 1;
+        let prev = s.total_volume_completed.get(token.clone()).unwrap_or(0);
+        s.total_volume_completed.set(token.clone(), prev + amount);
+        Self::save_global_stats(env, &s);
+    }
+
+    fn inc_global_refunded(env: &Env, token: &Address, amount: i128) {
+        let mut s = Self::load_global_stats(env);
+        s.total_payments_refunded += 1;
+        let prev = s.total_volume_refunded.get(token.clone()).unwrap_or(0);
+        s.total_volume_refunded.set(token.clone(), prev + amount);
+        Self::save_global_stats(env, &s);
+    }
+
+    fn inc_global_expired(env: &Env) {
+        let mut s = Self::load_global_stats(env);
+        s.total_payments_expired += 1;
+        Self::save_global_stats(env, &s);
+    }
+
+    fn inc_merchant_created(env: &Env, merchant: &Address) {
+        let mut s = Self::load_merchant_stats(env, merchant);
+        s.payments_created += 1;
+        Self::save_merchant_stats(env, merchant, &s);
+    }
+
+    fn inc_merchant_completed(env: &Env, merchant: &Address, token: &Address, amount: i128) {
+        let mut s = Self::load_merchant_stats(env, merchant);
+        s.payments_completed += 1;
+        let prev = s.volume_completed.get(token.clone()).unwrap_or(0);
+        s.volume_completed.set(token.clone(), prev + amount);
+        Self::save_merchant_stats(env, merchant, &s);
+    }
+
+    fn inc_merchant_refunded(env: &Env, merchant: &Address, token: &Address, amount: i128) {
+        let mut s = Self::load_merchant_stats(env, merchant);
+        s.payments_refunded += 1;
+        let _ = (token, amount); // volume tracked globally; merchant count only
+        Self::save_merchant_stats(env, merchant, &s);
+    }
+
+    fn inc_volume_bucket(env: &Env, token: &Address, amount: i128) {
+        let bucket = env.ledger().sequence() / LEDGER_BUCKET_SIZE;
+        let key = DataKey::VolumeBucket(token.clone(), bucket);
+        let prev: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        env.storage().persistent().set(&key, &(prev + amount));
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
 
     fn next_payment_id(env: &Env) -> u32 {

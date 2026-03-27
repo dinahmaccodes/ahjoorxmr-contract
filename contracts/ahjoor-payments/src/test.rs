@@ -1683,6 +1683,357 @@ fn test_recovery_after_resume() {
 }
 
 // ===========================================================================
+//  Analytics / Statistics Tests (#70)
+// ===========================================================================
+
+#[test]
+fn test_stats_zero_on_init() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let stats = s.client.get_stats();
+    assert_eq!(stats.total_payments_created, 0);
+    assert_eq!(stats.total_payments_completed, 0);
+    assert_eq!(stats.total_payments_refunded, 0);
+    assert_eq!(stats.total_payments_expired, 0);
+}
+
+#[test]
+fn test_stats_created_increments_on_create() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    s.client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    assert_eq!(s.client.get_stats().total_payments_created, 1);
+
+    s.client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    assert_eq!(s.client.get_stats().total_payments_created, 2);
+}
+
+#[test]
+fn test_stats_completed_and_volume_on_complete() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &300, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid);
+
+    let stats = s.client.get_stats();
+    assert_eq!(stats.total_payments_completed, 1);
+    assert_eq!(
+        stats
+            .total_volume_completed
+            .get(s.token_addr.clone())
+            .unwrap(),
+        300
+    );
+}
+
+#[test]
+fn test_stats_volume_accumulates_across_completions() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid0 = s
+        .client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    let pid1 = s
+        .client
+        .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid0);
+    s.client.complete_payment(&pid1);
+
+    let stats = s.client.get_stats();
+    assert_eq!(stats.total_payments_completed, 2);
+    assert_eq!(
+        stats
+            .total_volume_completed
+            .get(s.token_addr.clone())
+            .unwrap(),
+        300
+    );
+}
+
+#[test]
+fn test_stats_refunded_increments_on_dispute_refund() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+    s.client
+        .dispute_payment(&customer, &pid, &String::from_str(&s.env, "bad"));
+    s.client.resolve_dispute(&pid, &false);
+
+    let stats = s.client.get_stats();
+    assert_eq!(stats.total_payments_refunded, 1);
+    assert_eq!(
+        stats
+            .total_volume_refunded
+            .get(s.token_addr.clone())
+            .unwrap(),
+        200
+    );
+}
+
+#[test]
+fn test_stats_refunded_increments_on_partial_refund() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+    s.client.partial_refund(&pid, &50);
+    s.client.partial_refund(&pid, &50);
+
+    let stats = s.client.get_stats();
+    assert_eq!(stats.total_payments_refunded, 2);
+    assert_eq!(
+        stats
+            .total_volume_refunded
+            .get(s.token_addr.clone())
+            .unwrap(),
+        100
+    );
+}
+
+#[test]
+fn test_stats_expired_increments_on_expire() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    s.env.ledger().set_timestamp(0);
+    s.client.set_payment_timeout(&100);
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+
+    s.env.ledger().set_timestamp(200);
+    s.client.expire_payment(&pid);
+
+    assert_eq!(s.client.get_stats().total_payments_expired, 1);
+}
+
+#[test]
+fn test_stats_batch_create_increments_correctly() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &5000);
+
+    let requests = soroban_sdk::vec![
+        &s.env,
+        PaymentRequest {
+            merchant: merchant.clone(),
+            amount: 100,
+            token: s.token_addr.clone(),
+            reference: None,
+            metadata: None
+        },
+        PaymentRequest {
+            merchant: merchant.clone(),
+            amount: 200,
+            token: s.token_addr.clone(),
+            reference: None,
+            metadata: None
+        },
+        PaymentRequest {
+            merchant: merchant.clone(),
+            amount: 300,
+            token: s.token_addr.clone(),
+            reference: None,
+            metadata: None
+        },
+    ];
+    s.client.create_payments_batch(&customer, &requests);
+
+    assert_eq!(s.client.get_stats().total_payments_created, 3);
+}
+
+#[test]
+fn test_merchant_stats_zero_for_unknown_merchant() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let merchant = Address::generate(&s.env);
+    let ms = s.client.get_merchant_stats(&merchant);
+    assert_eq!(ms.payments_created, 0);
+    assert_eq!(ms.payments_completed, 0);
+    assert_eq!(ms.payments_refunded, 0);
+}
+
+#[test]
+fn test_merchant_stats_created_and_completed() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &400, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid);
+
+    let ms = s.client.get_merchant_stats(&merchant);
+    assert_eq!(ms.payments_created, 1);
+    assert_eq!(ms.payments_completed, 1);
+    assert_eq!(ms.volume_completed.get(s.token_addr.clone()).unwrap(), 400);
+}
+
+#[test]
+fn test_merchant_stats_are_isolated_between_merchants() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant_a = Address::generate(&s.env);
+    let merchant_b = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &2000);
+
+    let pid_a = s
+        .client
+        .create_payment(&customer, &merchant_a, &100, &s.token_addr, &None, &None);
+    s.client
+        .create_payment(&customer, &merchant_b, &200, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid_a);
+
+    let ms_a = s.client.get_merchant_stats(&merchant_a);
+    let ms_b = s.client.get_merchant_stats(&merchant_b);
+
+    assert_eq!(ms_a.payments_created, 1);
+    assert_eq!(ms_a.payments_completed, 1);
+    assert_eq!(ms_b.payments_created, 1);
+    assert_eq!(ms_b.payments_completed, 0);
+}
+
+#[test]
+fn test_merchant_stats_refunded_on_dispute_resolution() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &150, &s.token_addr, &None, &None);
+    s.client
+        .dispute_payment(&customer, &pid, &String::from_str(&s.env, "issue"));
+    s.client.resolve_dispute(&pid, &false);
+
+    let ms = s.client.get_merchant_stats(&merchant);
+    assert_eq!(ms.payments_refunded, 1);
+}
+
+#[test]
+fn test_weekly_volume_bucket_accumulates() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid0 = s
+        .client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    let pid1 = s
+        .client
+        .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid0);
+    s.client.complete_payment(&pid1);
+
+    assert_eq!(s.client.get_weekly_volume(&s.token_addr), 300);
+}
+
+#[test]
+fn test_global_stats_consistent_after_full_lifecycle() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &2000);
+
+    // create 3, complete 1, refund 1 via dispute, expire 1
+    let pid0 = s
+        .client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    let pid1 = s
+        .client
+        .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+    s.env.ledger().set_timestamp(0);
+    s.client.set_payment_timeout(&50);
+    let pid2 = s
+        .client
+        .create_payment(&customer, &merchant, &300, &s.token_addr, &None, &None);
+
+    s.client.complete_payment(&pid0);
+
+    s.client
+        .dispute_payment(&customer, &pid1, &String::from_str(&s.env, "bad"));
+    s.client.resolve_dispute(&pid1, &false);
+
+    s.env.ledger().set_timestamp(200);
+    s.client.expire_payment(&pid2);
+
+    let stats = s.client.get_stats();
+    assert_eq!(stats.total_payments_created, 3);
+    assert_eq!(stats.total_payments_completed, 1);
+    assert_eq!(stats.total_payments_refunded, 1);
+    assert_eq!(stats.total_payments_expired, 1);
+    assert_eq!(
+        stats
+            .total_volume_completed
+            .get(s.token_addr.clone())
+            .unwrap(),
+        100
+    );
+    assert_eq!(
+        stats
+            .total_volume_refunded
+            .get(s.token_addr.clone())
+            .unwrap(),
+        200
+    );
+}
+
+// ===========================================================================
 //  Payment Receipt / Proof Tests (#65)
 // ===========================================================================
 
