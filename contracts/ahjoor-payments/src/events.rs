@@ -101,6 +101,16 @@ pub struct SubscriptionCancelled {
     pub cancelled_by: Address,
 }
 
+/// Event: Merchant settlement batch processed.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BatchSettlementProcessed {
+    pub merchant: Address,
+    pub total_amount: i128,
+    pub fee_collected: i128,
+    pub payment_count: u32,
+}
+
 /// Event: Payment disputed by customer
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -287,6 +297,22 @@ pub fn emit_subscription_cancelled(e: &Env, subscription_id: u32, cancelled_by: 
     SubscriptionCancelled {
         subscription_id,
         cancelled_by,
+    }
+    .publish(e);
+}
+
+pub fn emit_batch_settlement_processed(
+    e: &Env,
+    merchant: Address,
+    total_amount: i128,
+    fee_collected: i128,
+    payment_count: u32,
+) {
+    BatchSettlementProcessed {
+        merchant,
+        total_amount,
+        fee_collected,
+        payment_count,
     }
     .publish(e);
 }

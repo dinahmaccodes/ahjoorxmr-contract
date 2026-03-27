@@ -53,6 +53,8 @@ const TEMP_LIFETIME_THRESHOLD: u32 = 10_000;
 const TEMP_BUMP_AMOUNT: u32 = 15_000;
 
 const DEFAULT_MAX_BATCH_SIZE: u32 = 20;
+const MAX_SETTLEMENT_BATCH_SIZE: u32 = 50;
+const SETTLEMENT_FEE_BPS: i128 = 0;
 const DEFAULT_DISPUTE_TIMEOUT: u64 = 7 * 24 * 60 * 60; // 7 days in seconds
 /// Default rate limit: effectively disabled until admin configures stricter values.
 const DEFAULT_RATE_LIMIT_MAX_PAYMENTS: u32 = u32::MAX;
@@ -175,7 +177,7 @@ pub struct CustomerRateLimit {
 /// - Instance:    Admin, PaymentCounter, MaxBatchSize, DisputeTimeout,
 ///                OracleAddress, UsdcToken
 ///                (config/counters — bounded, shared TTL with contract)
-/// - Persistent:  Payment(u32), CustomerPayments(Address)
+/// - Persistent:  Payment(u32), CustomerPayments(Address), Settled(u32)
 ///                (per-record data — unbounded, individual TTL)
 /// - Temporary:   Dispute(u32)
 ///                (in-progress dispute state — short-lived, auto-expires)
@@ -214,6 +216,8 @@ pub enum DataKey {
     // --- Persistent ---
     Payment(u32),
     CustomerPayments(Address),
+    /// Settlement marker to prevent double merchant settlement
+    Settled(u32),
     /// Per-customer rate limit usage state
     CustomerRateLimit(Address),
     /// Merchant approval status (true = approved)
@@ -469,7 +473,8 @@ impl AhjoorPaymentsContract {
         payment_ids
     }
 
-    /// Admin releases escrowed funds to the merchant. Payment must be Pending.
+    /// Admin marks a payment as completed and ready for merchant settlement.
+    /// Funds remain in escrow until `settle_merchant_payments`.
     pub fn complete_payment(env: Env, payment_id: u32) {
         Self::require_not_paused(&env);
         let admin: Address = env
@@ -494,13 +499,6 @@ impl AhjoorPaymentsContract {
             panic!("Payment has expired");
         }
 
-        let client = token::Client::new(&env, &payment.token);
-        client.transfer(
-            &env.current_contract_address(),
-            &payment.merchant,
-            &payment.amount,
-        );
-
         let old_status = payment.status;
         payment.status = PaymentStatus::Completed;
         let completed_at = env.ledger().timestamp();
@@ -511,6 +509,14 @@ impl AhjoorPaymentsContract {
             .set(&DataKey::Payment(payment_id), &payment);
         env.storage().persistent().extend_ttl(
             &DataKey::Payment(payment_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settled(payment_id), &false);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Settled(payment_id),
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
@@ -549,6 +555,103 @@ impl AhjoorPaymentsContract {
         Self::inc_global_completed(&env, &payment.token, payment.amount);
         Self::inc_merchant_completed(&env, &payment.merchant, &payment.token, payment.amount);
         Self::inc_volume_bucket(&env, &payment.token, payment.amount);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Settle a merchant batch in one transfer.
+    /// Validates all payment IDs first, then executes settlement atomically.
+    pub fn settle_merchant_payments(
+        env: Env,
+        admin: Address,
+        merchant: Address,
+        payment_ids: Vec<u32>,
+    ) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can settle merchant payments");
+        }
+
+        let batch_size = payment_ids.len();
+        if batch_size == 0 {
+            panic!("Settlement batch cannot be empty");
+        }
+        if batch_size > MAX_SETTLEMENT_BATCH_SIZE {
+            panic!("Settlement batch size exceeds maximum allowed");
+        }
+
+        let first_payment: Payment = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Payment(payment_ids.get(0).unwrap()))
+            .expect("Payment not found");
+        let settlement_token = first_payment.token.clone();
+
+        let mut total_amount: i128 = 0;
+        for payment_id in payment_ids.iter() {
+            let payment: Payment = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Payment(payment_id))
+                .expect("Payment not found");
+
+            if payment.status != PaymentStatus::Completed {
+                panic!("Payment is not completed");
+            }
+            if payment.merchant != merchant {
+                panic!("Payment does not belong to merchant");
+            }
+            if payment.token != settlement_token {
+                panic!("All payments in batch must have same token");
+            }
+            let settled: bool = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Settled(payment_id))
+                .unwrap_or(false);
+            if settled {
+                panic!("Payment already settled");
+            }
+
+            total_amount = total_amount
+                .checked_add(payment.amount)
+                .expect("Settlement amount overflow");
+        }
+
+        let fee_collected = (total_amount * SETTLEMENT_FEE_BPS) / 10_000;
+        let net_amount = total_amount
+            .checked_sub(fee_collected)
+            .expect("Settlement fee exceeds amount");
+
+        let token_client = token::Client::new(&env, &settlement_token);
+        token_client.transfer(&env.current_contract_address(), &merchant, &net_amount);
+
+        for payment_id in payment_ids.iter() {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Settled(payment_id), &true);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Settled(payment_id),
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
+        events::emit_batch_settlement_processed(
+            &env,
+            merchant,
+            total_amount,
+            fee_collected,
+            batch_size,
+        );
 
         env.storage()
             .instance()
@@ -637,12 +740,15 @@ impl AhjoorPaymentsContract {
         let old_status = payment.status;
 
         if release_to_merchant {
-            client.transfer(
-                &env.current_contract_address(),
-                &payment.merchant,
-                &payment.amount,
-            );
             payment.status = PaymentStatus::Completed;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Settled(payment_id), &false);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Settled(payment_id),
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
         } else {
             client.transfer(
                 &env.current_contract_address(),
@@ -914,7 +1020,7 @@ impl AhjoorPaymentsContract {
             &required_token_amount,
         );
 
-        // --- Record payment in USDC terms so complete_payment releases USDC ---
+        // --- Record payment in USDC terms so settlement releases USDC ---
         let timeout: u64 = env
             .storage()
             .instance()
@@ -1306,6 +1412,13 @@ impl AhjoorPaymentsContract {
 
     pub fn get_rate_limit_config(env: Env) -> RateLimitConfig {
         Self::get_rate_limit_config_internal(&env)
+    }
+
+    pub fn is_settled(env: Env, payment_id: u32) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Settled(payment_id))
+            .unwrap_or(false)
     }
 
     // --- Payment Expiry (#54) ---

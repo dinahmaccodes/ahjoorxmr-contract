@@ -99,7 +99,7 @@ fn test_create_single_payment_escrow() {
 }
 
 #[test]
-fn test_complete_payment_releases_to_merchant() {
+fn test_complete_payment_marks_ready_for_settlement() {
     let s = setup();
     s.client.initialize(&s.admin);
 
@@ -112,11 +112,12 @@ fn test_complete_payment_releases_to_merchant() {
             .create_payment(&customer, &merchant, &250, &s.token_addr, &None, &None);
     s.client.complete_payment(&payment_id);
 
-    assert_eq!(s.token_client.balance(&merchant), 250);
-    assert_eq!(s.token_client.balance(&s.client.address), 0);
+    assert_eq!(s.token_client.balance(&merchant), 0);
+    assert_eq!(s.token_client.balance(&s.client.address), 250);
 
     let payment = s.client.get_payment(&payment_id);
     assert_eq!(payment.status, PaymentStatus::Completed);
+    assert!(!s.client.is_settled(&payment_id));
 }
 
 #[test]
@@ -400,8 +401,9 @@ fn test_resolve_dispute_to_merchant() {
 
     let payment = s.client.get_payment(&payment_id);
     assert_eq!(payment.status, PaymentStatus::Completed);
-    assert_eq!(s.token_client.balance(&merchant), 300);
-    assert_eq!(s.token_client.balance(&s.client.address), 0);
+    assert_eq!(s.token_client.balance(&merchant), 0);
+    assert_eq!(s.token_client.balance(&s.client.address), 300);
+    assert!(!s.client.is_settled(&payment_id));
 
     let dispute = s.client.get_dispute(&payment_id);
     assert!(dispute.resolved);
@@ -557,7 +559,6 @@ fn test_set_max_batch_size() {
     assert_eq!(s.client.get_max_batch_size(), 50);
 }
 
-
 #[test]
 fn test_rate_limit_blocks_after_max_within_window() {
     let s = setup();
@@ -656,7 +657,6 @@ fn test_admin_can_update_rate_limit_config() {
     assert_eq!(cfg_after.max_payments, 7);
     assert_eq!(cfg_after.window_size_ledgers, 42);
 }
-
 
 #[test]
 fn test_is_disputed() {
@@ -814,7 +814,7 @@ fn test_resolve_emits_events() {
 
     let events = s.env.events().all();
     assert!(
-        events.len() >= 3,
+        events.len() >= 2,
         "Expected multiple events for full dispute lifecycle"
     );
 }
@@ -1304,7 +1304,7 @@ fn test_contract_holds_escrow() {
     assert_eq!(contract_balance, 250);
 }
 
-/// Verify merchant receives tokens on payment completion
+/// Verify completion only marks payment; settlement transfer happens later.
 #[test]
 fn test_token_transfer_on_payment_completion() {
     let s = setup();
@@ -1320,10 +1320,10 @@ fn test_token_transfer_on_payment_completion() {
     s.client.complete_payment(&payment_id);
 
     let merchant_balance = s.token_client.balance(&merchant);
-    assert_eq!(merchant_balance, 250);
+    assert_eq!(merchant_balance, 0);
 
     let contract_balance = s.token_client.balance(&s.client.address);
-    assert_eq!(contract_balance, 0);
+    assert_eq!(contract_balance, 250);
 }
 
 /// Verify customer receives tokens on refund
@@ -1391,7 +1391,7 @@ fn test_token_transfer_on_batch_payment() {
     assert_eq!(contract_balance, 600);
 }
 
-/// Verify dispute resolution transfers to merchant
+/// Verify dispute resolution to merchant keeps funds in escrow until settlement.
 #[test]
 fn test_token_transfer_on_dispute_resolution_to_merchant() {
     let s = setup();
@@ -1412,10 +1412,11 @@ fn test_token_transfer_on_dispute_resolution_to_merchant() {
     s.client.resolve_dispute(&payment_id, &true); // Release to merchant
 
     let merchant_balance = s.token_client.balance(&merchant);
-    assert_eq!(merchant_balance, 250);
+    assert_eq!(merchant_balance, 0);
 
     let customer_balance = s.token_client.balance(&customer);
     assert_eq!(customer_balance, 750);
+    assert_eq!(s.token_client.balance(&s.client.address), 250);
 }
 
 /// Verify multiple payments track balances correctly
@@ -1444,10 +1445,121 @@ fn test_token_balance_tracking_multiple_payments() {
     s.client.complete_payment(&payment1);
 
     let merchant_balance = s.token_client.balance(&merchant);
-    assert_eq!(merchant_balance, 200);
+    assert_eq!(merchant_balance, 0);
 
     let contract_balance = s.token_client.balance(&s.client.address);
-    assert_eq!(contract_balance, 300);
+    assert_eq!(contract_balance, 500);
+}
+
+#[test]
+fn test_settle_merchant_payments_single_transfer_marks_all_settled() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &2000);
+
+    let p1 = s
+        .client
+        .create_payment(&customer, &merchant, &100, &s.token_addr, &None, &None);
+    let p2 = s
+        .client
+        .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+    let p3 = s
+        .client
+        .create_payment(&customer, &merchant, &300, &s.token_addr, &None, &None);
+
+    s.client.complete_payment(&p1);
+    s.client.complete_payment(&p2);
+    s.client.complete_payment(&p3);
+
+    let batch = soroban_sdk::vec![&s.env, p1, p2, p3];
+    s.client
+        .settle_merchant_payments(&s.admin, &merchant, &batch);
+
+    assert_eq!(s.token_client.balance(&merchant), 600);
+    assert_eq!(s.token_client.balance(&s.client.address), 0);
+    assert!(s.client.is_settled(&p1));
+    assert!(s.client.is_settled(&p2));
+    assert!(s.client.is_settled(&p3));
+}
+
+#[test]
+fn test_settle_merchant_payments_prevents_double_settlement() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let pid = s
+        .client
+        .create_payment(&customer, &merchant, &250, &s.token_addr, &None, &None);
+    s.client.complete_payment(&pid);
+
+    let batch = soroban_sdk::vec![&s.env, pid];
+    s.client
+        .settle_merchant_payments(&s.admin, &merchant, &batch);
+    let second = s
+        .client
+        .try_settle_merchant_payments(&s.admin, &merchant, &batch);
+    assert!(second.is_err());
+}
+
+#[test]
+fn test_settle_merchant_payments_partial_failure_reverts_entire_batch() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &1000);
+
+    let completed =
+        s.client
+            .create_payment(&customer, &merchant, &200, &s.token_addr, &None, &None);
+    let pending = s
+        .client
+        .create_payment(&customer, &merchant, &150, &s.token_addr, &None, &None);
+    s.client.complete_payment(&completed);
+
+    let batch = soroban_sdk::vec![&s.env, completed, pending];
+    let res = s
+        .client
+        .try_settle_merchant_payments(&s.admin, &merchant, &batch);
+    assert!(res.is_err());
+
+    // No partial transfer and no settled marker updates should occur.
+    assert_eq!(s.token_client.balance(&merchant), 0);
+    assert_eq!(s.token_client.balance(&s.client.address), 350);
+    assert!(!s.client.is_settled(&completed));
+    assert!(!s.client.is_settled(&pending));
+}
+
+#[test]
+fn test_settle_merchant_payments_batch_size_capped() {
+    let s = setup();
+    s.client.initialize(&s.admin);
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &10_000);
+
+    let mut batch = soroban_sdk::Vec::<u32>::new(&s.env);
+    for _ in 0..51 {
+        let pid = s
+            .client
+            .create_payment(&customer, &merchant, &10, &s.token_addr, &None, &None);
+        s.client.complete_payment(&pid);
+        batch.push_back(pid);
+    }
+
+    let res = s
+        .client
+        .try_settle_merchant_payments(&s.admin, &merchant, &batch);
+    assert!(res.is_err());
 }
 
 // ===========================================================================
