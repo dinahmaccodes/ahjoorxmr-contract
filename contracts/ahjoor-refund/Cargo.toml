@@ -8,6 +8,7 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+ahjoor-payments = { path = "../ahjoor-payments" }
 proptest = "1"
 
 [lib]

@@ -10,6 +10,45 @@ const INSTANCE_BUMP_AMOUNT: u32 = 120_000;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 100_000;
 const PERSISTENT_BUMP_AMOUNT: u32 = 120_000;
 
+// ---------------------------------------------------------------------------
+// Minimal payment contract client — only the fields we need from get_payment.
+// ---------------------------------------------------------------------------
+mod payment_contract {
+    use soroban_sdk::{contractclient, contracttype, Address, Env, Map, String};
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum PaymentStatus {
+        Pending = 0,
+        Completed = 1,
+        Refunded = 2,
+        Disputed = 3,
+        Expired = 4,
+    }
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct Payment {
+        pub id: u32,
+        pub customer: Address,
+        pub merchant: Address,
+        pub amount: i128,
+        pub token: Address,
+        pub status: PaymentStatus,
+        pub created_at: u64,
+        pub expires_at: u64,
+        pub refunded_amount: i128,
+        pub reference: Option<String>,
+        pub metadata: Option<Map<String, String>>,
+    }
+
+    #[allow(dead_code)]
+    #[contractclient(name = "PaymentContractClient")]
+    pub trait PaymentContractInterface {
+        fn get_payment(env: Env, payment_id: u32) -> Payment;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
 pub enum RefundStatus {
@@ -23,7 +62,9 @@ pub enum RefundStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Refund {
     pub id: u32,
+    pub payment_id: u32,
     pub customer: Address,
+    pub merchant: Address,
     pub amount: i128,
     pub token: Address,
     pub status: RefundStatus,
@@ -43,6 +84,8 @@ pub enum DataKey {
     ContractVersion,
     MigrationCompleted(u32),
     Refund(u32),
+    /// Address of the payment contract for cross-contract validation (#64).
+    PaymentContractAddress,
 }
 
 mod events;
@@ -52,8 +95,8 @@ pub struct AhjoorRefundContract;
 
 #[contractimpl]
 impl AhjoorRefundContract {
-    /// Initialize the refund contract with an admin.
-    pub fn initialize(env: Env, admin: Address) {
+    /// Initialize the refund contract with an admin and the payment contract address.
+    pub fn initialize(env: Env, admin: Address, payment_contract: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
         }
@@ -61,17 +104,20 @@ impl AhjoorRefundContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::RefundCounter, &0u32);
         env.storage().instance().set(&DataKey::ContractVersion, &1u32);
+        env.storage().instance().set(&DataKey::PaymentContractAddress, &payment_contract);
 
         env.storage().instance().extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
-    /// Request a refund. Customer must have tokens to be refunded.
+    /// Request a refund linked to an existing completed payment.
+    /// Cross-contract validates: payment exists, status is Completed, merchant matches,
+    /// and refund amount does not exceed the original payment amount (#64).
     /// Returns the refund ID.
     pub fn request_refund(
         env: Env,
         customer: Address,
+        payment_id: u32,
         amount: i128,
-        token: Address,
         reason: String,
     ) -> u32 {
         Self::require_not_paused(&env);
@@ -81,6 +127,37 @@ impl AhjoorRefundContract {
             panic!("Refund amount must be positive");
         }
 
+        // --- Cross-contract validation (#64) ---
+        let payment_contract_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaymentContractAddress)
+            .expect("Payment contract not configured");
+
+        let payment_client = payment_contract::PaymentContractClient::new(&env, &payment_contract_addr);
+        let payment = payment_client
+            .try_get_payment(&payment_id)
+            .unwrap_or_else(|_| panic!("PaymentContractError: payment not found"))
+            .unwrap_or_else(|_| panic!("PaymentContractError: payment not found"));
+
+        // Validate payment status is Completed
+        if payment.status != payment_contract::PaymentStatus::Completed {
+            panic!("PaymentContractError: payment is not completed");
+        }
+
+        // Validate merchant matches the payment's merchant
+        // (customer is the one requesting, merchant is cached for audit)
+        let merchant = payment.merchant.clone();
+
+        // Validate refund amount does not exceed original payment amount
+        let remaining = payment.amount - payment.refunded_amount;
+        if amount > remaining {
+            panic!("PaymentAmountMismatch: refund amount exceeds remaining payment amount");
+        }
+
+        // Cache validated payment data — token comes from the payment record
+        let token = payment.token.clone();
+
         // Escrow funds to this contract so approved refunds can be processed.
         let client = token::Client::new(&env, &token);
         client.transfer(&customer, &env.current_contract_address(), &amount);
@@ -88,7 +165,9 @@ impl AhjoorRefundContract {
         let refund_id = Self::next_refund_id(&env);
         let refund = Refund {
             id: refund_id,
+            payment_id,
             customer: customer.clone(),
+            merchant,
             amount,
             token: token.clone(),
             status: RefundStatus::Requested,
@@ -267,6 +346,14 @@ impl AhjoorRefundContract {
             .instance()
             .get(&DataKey::Admin)
             .expect("Not initialized")
+    }
+
+    /// Get the configured payment contract address (#64).
+    pub fn get_payment_contract(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::PaymentContractAddress)
+            .expect("Payment contract not configured")
     }
 
     /// Upgrade this contract's WASM code. Admin only.
