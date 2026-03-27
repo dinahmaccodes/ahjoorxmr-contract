@@ -784,6 +784,273 @@ proptest! {
 }
 
 // ===========================================================================
+//  Indexing & Pagination Tests (#62)
+// ===========================================================================
+
+/// Helper: request N refunds from the same customer against N distinct payments.
+/// Each payment has amount 100 and each refund requests 10.
+/// Returns the vec of refund IDs in creation order.
+fn request_n_refunds<'a>(
+    s: &TestSetup<'a>,
+    customer: &Address,
+    merchant: &Address,
+    n: u32,
+) -> soroban_sdk::Vec<u32> {
+    let mut ids = soroban_sdk::Vec::new(&s.env);
+    for _ in 0..n {
+        let pid = create_completed_payment(s, customer, merchant, 100);
+        s.token_admin_client.mint(customer, &10);
+        let rid = s.refund_client.request_refund(
+            customer,
+            &pid,
+            &10,
+            &String::from_str(&s.env, "reason"),
+        );
+        ids.push_back(rid);
+    }
+    ids
+}
+
+// --- get_refunds_by_customer ---
+
+#[test]
+fn test_get_refunds_by_customer_empty() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let result = s.refund_client.get_refunds_by_customer(&customer, &10, &0);
+    assert_eq!(result.len(), 0);
+}
+
+#[test]
+fn test_get_refunds_by_customer_full_page() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    let ids = request_n_refunds(&s, &customer, &merchant, 5);
+
+    let page = s.refund_client.get_refunds_by_customer(&customer, &5, &0);
+    assert_eq!(page.len(), 5);
+    for i in 0..5u32 {
+        assert_eq!(page.get(i).unwrap(), ids.get(i).unwrap());
+    }
+}
+
+#[test]
+fn test_get_refunds_by_customer_partial_page() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    request_n_refunds(&s, &customer, &merchant, 3);
+
+    // ask for 10 but only 3 exist
+    let page = s.refund_client.get_refunds_by_customer(&customer, &10, &0);
+    assert_eq!(page.len(), 3);
+}
+
+#[test]
+fn test_get_refunds_by_customer_second_page() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    let ids = request_n_refunds(&s, &customer, &merchant, 5);
+
+    // page size 2, offset 2 → items at index 2,3
+    let page = s.refund_client.get_refunds_by_customer(&customer, &2, &2);
+    assert_eq!(page.len(), 2);
+    assert_eq!(page.get(0).unwrap(), ids.get(2).unwrap());
+    assert_eq!(page.get(1).unwrap(), ids.get(3).unwrap());
+}
+
+#[test]
+fn test_get_refunds_by_customer_offset_beyond_end() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    request_n_refunds(&s, &customer, &merchant, 3);
+
+    let page = s
+        .refund_client
+        .get_refunds_by_customer(&customer, &10, &100);
+    assert_eq!(page.len(), 0);
+}
+
+#[test]
+fn test_get_refunds_by_customer_last_partial_page() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    let ids = request_n_refunds(&s, &customer, &merchant, 5);
+
+    // offset 4, limit 10 → only the last item
+    let page = s.refund_client.get_refunds_by_customer(&customer, &10, &4);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap(), ids.get(4).unwrap());
+}
+
+// --- get_refunds_by_merchant ---
+
+#[test]
+fn test_get_refunds_by_merchant_empty() {
+    let s = setup();
+    let merchant = Address::generate(&s.env);
+    let result = s.refund_client.get_refunds_by_merchant(&merchant, &10, &0);
+    assert_eq!(result.len(), 0);
+}
+
+#[test]
+fn test_get_refunds_by_merchant_full_page() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    let ids = request_n_refunds(&s, &customer, &merchant, 4);
+
+    let page = s.refund_client.get_refunds_by_merchant(&merchant, &4, &0);
+    assert_eq!(page.len(), 4);
+    for i in 0..4u32 {
+        assert_eq!(page.get(i).unwrap(), ids.get(i).unwrap());
+    }
+}
+
+#[test]
+fn test_get_refunds_by_merchant_second_page() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    let ids = request_n_refunds(&s, &customer, &merchant, 6);
+
+    // page size 3, offset 3 → items at index 3,4,5
+    let page = s.refund_client.get_refunds_by_merchant(&merchant, &3, &3);
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.get(0).unwrap(), ids.get(3).unwrap());
+    assert_eq!(page.get(1).unwrap(), ids.get(4).unwrap());
+    assert_eq!(page.get(2).unwrap(), ids.get(5).unwrap());
+}
+
+#[test]
+fn test_get_refunds_by_merchant_offset_beyond_end() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    request_n_refunds(&s, &customer, &merchant, 2);
+
+    let page = s.refund_client.get_refunds_by_merchant(&merchant, &5, &50);
+    assert_eq!(page.len(), 0);
+}
+
+// --- get_refunds_by_payment ---
+
+#[test]
+fn test_get_refunds_by_payment_empty() {
+    let s = setup();
+    let result = s.refund_client.get_refunds_by_payment(&9999);
+    assert_eq!(result.len(), 0);
+}
+
+#[test]
+fn test_get_refunds_by_payment_single() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    let pid = create_completed_payment(&s, &customer, &merchant, 100);
+    s.token_admin_client.mint(&customer, &10);
+    let rid =
+        s.refund_client
+            .request_refund(&customer, &pid, &10, &String::from_str(&s.env, "reason"));
+
+    let result = s.refund_client.get_refunds_by_payment(&pid);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result.get(0).unwrap(), rid);
+}
+
+#[test]
+fn test_get_refunds_by_payment_multiple_refunds_same_payment() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    // One payment, two partial refunds
+    let pid = create_completed_payment(&s, &customer, &merchant, 100);
+    s.token_admin_client.mint(&customer, &20);
+    let rid0 =
+        s.refund_client
+            .request_refund(&customer, &pid, &10, &String::from_str(&s.env, "first"));
+    let rid1 =
+        s.refund_client
+            .request_refund(&customer, &pid, &10, &String::from_str(&s.env, "second"));
+
+    let result = s.refund_client.get_refunds_by_payment(&pid);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result.get(0).unwrap(), rid0);
+    assert_eq!(result.get(1).unwrap(), rid1);
+}
+
+// --- cross-index consistency ---
+
+#[test]
+fn test_indexes_consistent_across_all_three_dimensions() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    let pid = create_completed_payment(&s, &customer, &merchant, 100);
+    s.token_admin_client.mint(&customer, &10);
+    let rid =
+        s.refund_client
+            .request_refund(&customer, &pid, &10, &String::from_str(&s.env, "reason"));
+
+    assert_eq!(
+        s.refund_client
+            .get_refunds_by_customer(&customer, &10, &0)
+            .get(0)
+            .unwrap(),
+        rid
+    );
+    assert_eq!(
+        s.refund_client
+            .get_refunds_by_merchant(&merchant, &10, &0)
+            .get(0)
+            .unwrap(),
+        rid
+    );
+    assert_eq!(
+        s.refund_client.get_refunds_by_payment(&pid).get(0).unwrap(),
+        rid
+    );
+}
+
+#[test]
+fn test_different_customers_indexes_are_isolated() {
+    let s = setup();
+    let customer_a = Address::generate(&s.env);
+    let customer_b = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    let pid_a = create_completed_payment(&s, &customer_a, &merchant, 100);
+    s.token_admin_client.mint(&customer_a, &10);
+    s.refund_client
+        .request_refund(&customer_a, &pid_a, &10, &String::from_str(&s.env, "a"));
+
+    let pid_b = create_completed_payment(&s, &customer_b, &merchant, 100);
+    s.token_admin_client.mint(&customer_b, &10);
+    s.refund_client
+        .request_refund(&customer_b, &pid_b, &10, &String::from_str(&s.env, "b"));
+
+    assert_eq!(
+        s.refund_client
+            .get_refunds_by_customer(&customer_a, &10, &0)
+            .len(),
+        1
+    );
+    assert_eq!(
+        s.refund_client
+            .get_refunds_by_customer(&customer_b, &10, &0)
+            .len(),
+        1
+    );
+}
+
+// ===========================================================================
 //  Snapshot / Fuzz Tests
 // ===========================================================================
 

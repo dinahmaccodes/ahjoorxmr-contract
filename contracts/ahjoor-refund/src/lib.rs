@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, String};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Vec};
 
 // --- Storage TTL Constants ---
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_000;
@@ -84,6 +84,12 @@ pub enum DataKey {
     Refund(u32),
     /// Address of the payment contract for cross-contract validation (#64).
     PaymentContractAddress,
+    /// Index: customer → Vec<u32> of refund IDs
+    CustomerRefunds(Address),
+    /// Index: merchant → Vec<u32> of refund IDs
+    MerchantRefunds(Address),
+    /// Index: payment_id → Vec<u32> of refund IDs
+    PaymentRefunds(u32),
 }
 
 mod events;
@@ -172,7 +178,7 @@ impl AhjoorRefundContract {
             id: refund_id,
             payment_id,
             customer: customer.clone(),
-            merchant,
+            merchant: merchant.clone(),
             amount,
             token: token.clone(),
             status: RefundStatus::Requested,
@@ -190,6 +196,10 @@ impl AhjoorRefundContract {
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
+
+        Self::append_index(&env, &DataKey::CustomerRefunds(customer.clone()), refund_id);
+        Self::append_index(&env, &DataKey::MerchantRefunds(merchant.clone()), refund_id);
+        Self::append_index(&env, &DataKey::PaymentRefunds(payment_id), refund_id);
 
         events::emit_refund_requested(&env, refund_id, customer, amount, token, refund.reason);
 
@@ -280,7 +290,13 @@ impl AhjoorRefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
-        events::emit_refund_rejected(&env, refund_id, admin, rejection_reason);
+        events::emit_refund_rejected(
+            &env,
+            refund_id,
+            admin,
+            rejection_reason,
+            env.ledger().timestamp(),
+        );
 
         env.storage()
             .instance()
@@ -351,6 +367,34 @@ impl AhjoorRefundContract {
             .persistent()
             .get(&DataKey::Refund(refund_id))
             .expect("Refund not found")
+    }
+
+    /// Get refunds by customer with pagination.
+    pub fn get_refunds_by_customer(
+        env: Env,
+        customer: Address,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<u32> {
+        Self::paginate(&env, &DataKey::CustomerRefunds(customer), limit, offset)
+    }
+
+    /// Get refunds by merchant with pagination.
+    pub fn get_refunds_by_merchant(
+        env: Env,
+        merchant: Address,
+        limit: u32,
+        offset: u32,
+    ) -> Vec<u32> {
+        Self::paginate(&env, &DataKey::MerchantRefunds(merchant), limit, offset)
+    }
+
+    /// Get all refund IDs for a given payment ID.
+    pub fn get_refunds_by_payment(env: Env, payment_id: u32) -> Vec<u32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PaymentRefunds(payment_id))
+            .unwrap_or(Vec::new(&env))
     }
 
     /// Get refund counter
@@ -505,6 +549,29 @@ impl AhjoorRefundContract {
         if stored_admin != *admin {
             panic!("Only admin can manage pause state");
         }
+    }
+
+    fn append_index(env: &Env, key: &DataKey, refund_id: u32) {
+        let mut ids: Vec<u32> = env.storage().persistent().get(key).unwrap_or(Vec::new(env));
+        ids.push_back(refund_id);
+        env.storage().persistent().set(key, &ids);
+        env.storage().persistent().extend_ttl(
+            key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+
+    fn paginate(env: &Env, key: &DataKey, limit: u32, offset: u32) -> Vec<u32> {
+        let all: Vec<u32> = env.storage().persistent().get(key).unwrap_or(Vec::new(env));
+        let total = all.len();
+        let start = offset.min(total);
+        let end = (start + limit).min(total);
+        let mut page = Vec::new(env);
+        for i in start..end {
+            page.push_back(all.get(i).unwrap());
+        }
+        page
     }
 
     fn next_refund_id(env: &Env) -> u32 {

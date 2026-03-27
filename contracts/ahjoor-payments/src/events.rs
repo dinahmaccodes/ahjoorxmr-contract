@@ -1,5 +1,13 @@
 use crate::PaymentStatus;
-use soroban_sdk::{contractevent, Address, Env, String};
+use soroban_sdk::{contractevent, Address, BytesN, Env, String};
+
+/// Event: Payment receipt issued on completion (#65)
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PaymentReceiptIssued {
+    pub payment_id: u32,
+    pub receipt_hash: BytesN<32>,
+}
 
 /// Event: Multi-token payment created (customer paid in non-USDC token)
 #[contractevent]
@@ -51,6 +59,46 @@ pub struct PaymentCompleted {
     pub payment_id: u32,
     pub merchant: Address,
     pub amount: i128,
+    pub completed_at: u64,
+}
+
+/// Event: Payment expired — funds returned to customer
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PaymentExpired {
+    pub payment_id: u32,
+    pub customer: Address,
+    pub amount: i128,
+    pub expired_at: u64,
+}
+
+/// Event: Partial refund issued on a pending/disputed payment
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PaymentPartialRefund {
+    pub payment_id: u32,
+    pub customer: Address,
+    pub refund_amount: i128,
+    pub remaining: i128,
+}
+
+/// Event: Subscription charged
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCharged {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub charged_at: u64,
+}
+
+/// Event: Subscription cancelled
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct SubscriptionCancelled {
+    pub subscription_id: u32,
+    pub cancelled_by: Address,
 }
 
 /// Event: Payment disputed by customer
@@ -169,11 +217,76 @@ pub fn emit_payment_status_changed(
     .publish(e);
 }
 
-pub fn emit_payment_completed(e: &Env, payment_id: u32, merchant: Address, amount: i128) {
+pub fn emit_payment_completed(
+    e: &Env,
+    payment_id: u32,
+    merchant: Address,
+    amount: i128,
+    completed_at: u64,
+) {
     PaymentCompleted {
         payment_id,
         merchant,
         amount,
+        completed_at,
+    }
+    .publish(e);
+}
+
+pub fn emit_payment_expired(
+    e: &Env,
+    payment_id: u32,
+    customer: Address,
+    amount: i128,
+    expired_at: u64,
+) {
+    PaymentExpired {
+        payment_id,
+        customer,
+        amount,
+        expired_at,
+    }
+    .publish(e);
+}
+
+pub fn emit_payment_partial_refund(
+    e: &Env,
+    payment_id: u32,
+    customer: Address,
+    refund_amount: i128,
+    remaining: i128,
+) {
+    PaymentPartialRefund {
+        payment_id,
+        customer,
+        refund_amount,
+        remaining,
+    }
+    .publish(e);
+}
+
+pub fn emit_subscription_charged(
+    e: &Env,
+    subscription_id: u32,
+    subscriber: Address,
+    merchant: Address,
+    amount: i128,
+    charged_at: u64,
+) {
+    SubscriptionCharged {
+        subscription_id,
+        subscriber,
+        merchant,
+        amount,
+        charged_at,
+    }
+    .publish(e);
+}
+
+pub fn emit_subscription_cancelled(e: &Env, subscription_id: u32, cancelled_by: Address) {
+    SubscriptionCancelled {
+        subscription_id,
+        cancelled_by,
     }
     .publish(e);
 }
@@ -245,6 +358,14 @@ pub fn emit_contract_paused(e: &Env, admin: Address, reason: String, timestamp: 
 
 pub fn emit_contract_resumed(e: &Env, admin: Address, timestamp: u64) {
     ContractResumed { admin, timestamp }.publish(e);
+}
+
+pub fn emit_payment_receipt_issued(e: &Env, payment_id: u32, receipt_hash: BytesN<32>) {
+    PaymentReceiptIssued {
+        payment_id,
+        receipt_hash,
+    }
+    .publish(e);
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -27,6 +27,7 @@ pub struct RefundRejected {
     pub refund_id: u32,
     pub rejected_by: Address,
     pub rejection_reason: String,
+    pub rejected_at: u64,
 }
 
 /// Event: Refund processed (tokens transferred)
@@ -99,11 +100,13 @@ pub fn emit_refund_rejected(
     refund_id: u32,
     rejected_by: Address,
     rejection_reason: String,
+    rejected_at: u64,
 ) {
     RefundRejected {
         refund_id,
         rejected_by,
         rejection_reason,
+        rejected_at,
     }
     .publish(e);
 }
