@@ -53,6 +53,16 @@ pub struct PaymentCompleted {
     pub amount: i128,
 }
 
+/// Event: Merchant settlement batch processed.
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BatchSettlementProcessed {
+    pub merchant: Address,
+    pub total_amount: i128,
+    pub fee_collected: i128,
+    pub payment_count: u32,
+}
+
 /// Event: Payment disputed by customer
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -174,6 +184,22 @@ pub fn emit_payment_completed(e: &Env, payment_id: u32, merchant: Address, amoun
         payment_id,
         merchant,
         amount,
+    }
+    .publish(e);
+}
+
+pub fn emit_batch_settlement_processed(
+    e: &Env,
+    merchant: Address,
+    total_amount: i128,
+    fee_collected: i128,
+    payment_count: u32,
+) {
+    BatchSettlementProcessed {
+        merchant,
+        total_amount,
+        fee_collected,
+        payment_count,
     }
     .publish(e);
 }
