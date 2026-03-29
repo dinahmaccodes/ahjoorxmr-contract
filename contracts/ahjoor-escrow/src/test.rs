@@ -38,6 +38,9 @@ fn setup<'a>() -> TestSetup<'a> {
     let token_client = TokenClient::new(&env, &token_addr);
     let token_admin_client = TokenAdminClient::new(&env, &token_addr);
 
+    client.initialize(&admin);
+    client.add_allowed_token(&admin, &token_addr);
+
     TestSetup {
         env,
         client,
@@ -500,7 +503,6 @@ fn test_boundary_amount_i128_max_rejected_without_balance() {
 #[test]
 fn test_admin_can_upgrade_and_version_increments() {
     let s = setup();
-    s.client.initialize(&s.admin);
 
     assert_eq!(s.client.get_version(), 1);
 
@@ -520,7 +522,6 @@ fn test_admin_can_upgrade_and_version_increments() {
 #[test]
 fn test_unauthorized_upgrade_fails() {
     let s = setup();
-    s.client.initialize(&s.admin);
 
     let intruder = Address::generate(&s.env);
     let wasm_hash = s.env.deployer().upload_contract_wasm(UPGRADE_WASM);
@@ -533,7 +534,6 @@ fn test_unauthorized_upgrade_fails() {
 #[test]
 fn test_migration_runs_once_per_version() {
     let s = setup();
-    s.client.initialize(&s.admin);
 
     s.client.migrate(&s.admin);
 
@@ -544,7 +544,6 @@ fn test_migration_runs_once_per_version() {
 #[test]
 fn test_upgrade_atomicity_on_invalid_wasm_hash() {
     let s = setup();
-    s.client.initialize(&s.admin);
 
     let invalid_hash = BytesN::from_array(&s.env, &[7u8; 32]);
     let result = s.client.try_upgrade(&s.admin, &invalid_hash);
@@ -666,14 +665,13 @@ fn test_deadline_extension_invalid_deadline_rejected() {
 fn test_admin_can_pause_and_resume_contract() {
     let s = setup();
 
-    let admin = Address::generate(&s.env);
     let reason = String::from_str(&s.env, "Emergency maintenance");
 
-    s.client.pause_contract(&admin, &reason);
+    s.client.pause_contract(&s.admin, &reason);
     assert_eq!(s.client.is_paused(), true);
     assert_eq!(s.client.get_pause_reason(), reason);
 
-    s.client.resume_contract(&admin);
+    s.client.resume_contract(&s.admin);
     assert_eq!(s.client.is_paused(), false);
     assert_eq!(s.client.get_pause_reason(), String::from_str(&s.env, ""));
 }
@@ -682,10 +680,9 @@ fn test_admin_can_pause_and_resume_contract() {
 fn test_non_admin_cannot_resume_contract() {
     let s = setup();
 
-    let admin = Address::generate(&s.env);
     let non_admin = Address::generate(&s.env);
     s.client
-        .pause_contract(&admin, &String::from_str(&s.env, "Incident"));
+        .pause_contract(&s.admin, &String::from_str(&s.env, "Incident"));
 
     let res = s.client.try_resume_contract(&non_admin);
     assert!(res.is_err());
@@ -882,7 +879,6 @@ fn test_dispute_blocks_deadline_extension() {
 #[test]
 fn test_recovery_after_resume() {
     let s = setup();
-    let admin = Address::generate(&s.env);
 
     let buyer = Address::generate(&s.env);
     let seller = Address::generate(&s.env);
@@ -895,7 +891,7 @@ fn test_recovery_after_resume() {
             .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
 
     s.client
-        .pause_contract(&admin, &String::from_str(&s.env, "Emergency"));
+        .pause_contract(&s.admin, &String::from_str(&s.env, "Emergency"));
 
     let create_res =
         s.client
@@ -905,9 +901,59 @@ fn test_recovery_after_resume() {
     let release_res = s.client.try_release_escrow(&buyer, &escrow_id);
     assert!(release_res.is_err());
 
-    s.client.resume_contract(&admin);
+    s.client.resume_contract(&s.admin);
 
     s.client.release_escrow(&buyer, &escrow_id);
     let escrow = s.client.get_escrow(&escrow_id);
     assert_eq!(escrow.status, EscrowStatus::Released);
+}
+
+// ===========================================================================
+//  Multi-Token Allowlist Tests
+// ===========================================================================
+
+#[test]
+fn test_admin_can_add_and_remove_allowed_token() {
+    let s = setup();
+    let new_token = Address::generate(&s.env);
+    
+    s.client.add_allowed_token(&s.admin, &new_token);
+    
+    s.client.remove_allowed_token(&s.admin, &new_token);
+    
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+    
+    let res = s.client.try_create_escrow(&buyer, &seller, &arbiter, &100, &new_token, &deadline);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_non_admin_cannot_add_or_remove_allowed_token() {
+    let s = setup();
+    let non_admin = Address::generate(&s.env);
+    let new_token = Address::generate(&s.env);
+    
+    let res = s.client.try_add_allowed_token(&non_admin, &new_token);
+    assert!(res.is_err());
+    
+    let res = s.client.try_remove_allowed_token(&non_admin, &s.token_addr);
+    assert!(res.is_err());
+}
+
+#[test]
+#[should_panic(expected = "TokenNotAllowed")]
+fn test_create_escrow_with_disallowed_token_panics_token_not_allowed() {
+    let s = setup();
+    let unallowed_token = Address::generate(&s.env);
+    
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+    
+    let deadline = s.env.ledger().timestamp() + 1000;
+    s.client.create_escrow(&buyer, &seller, &arbiter, &250, &unallowed_token, &deadline);
 }

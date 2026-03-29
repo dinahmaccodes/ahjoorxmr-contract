@@ -94,6 +94,23 @@ pub struct ContractResumed {
     pub timestamp: u64,
 }
 
+/// Event: Token Allowlisted
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TokenAllowlisted {
+    pub admin: Address,
+    pub token: Address,
+}
+
+/// Event: Token Removed From Allowlist
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct TokenRemovedFromAllowlist {
+    pub admin: Address,
+    pub token: Address,
+}
+
+
 // --- Helper Emission Functions ---
 
 pub fn emit_escrow_created(
@@ -203,4 +220,12 @@ pub fn emit_deadline_extended(e: &Env, escrow_id: u32, old_deadline: u64, new_de
 
 pub fn emit_contract_resumed(e: &Env, admin: Address, timestamp: u64) {
     ContractResumed { admin, timestamp }.publish(e);
+}
+
+pub fn emit_token_allowlisted(e: &Env, admin: Address, token: Address) {
+    TokenAllowlisted { admin, token }.publish(e);
+}
+
+pub fn emit_token_removed_from_allowlist(e: &Env, admin: Address, token: Address) {
+    TokenRemovedFromAllowlist { admin, token }.publish(e);
 }
