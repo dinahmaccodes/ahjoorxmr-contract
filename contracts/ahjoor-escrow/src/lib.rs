@@ -62,6 +62,7 @@ pub enum DataKey {
     Escrow(u32),
     Dispute(u32),
     DeadlineProposal(u32),
+    AllowedToken(Address),
 }
 
 mod events;
@@ -107,6 +108,15 @@ impl AhjoorEscrowContract {
 
         if deadline <= env.ledger().timestamp() {
             panic!("Deadline must be in the future");
+        }
+
+        let is_allowed = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        if !is_allowed {
+            panic!("TokenNotAllowed");
         }
 
         // Transfer tokens from buyer to contract (escrow)
@@ -599,6 +609,30 @@ impl AhjoorEscrowContract {
             .instance()
             .get(&DataKey::PauseReason)
             .unwrap_or(String::from_str(&env, ""))
+    }
+
+    /// Add a token to the allowlist. Admin only.
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(token.clone()), &true);
+        events::emit_token_allowlisted(&env, admin, token);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Remove a token from the allowlist. Admin only.
+    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedToken(token.clone()));
+        events::emit_token_removed_from_allowlist(&env, admin, token);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     // --- Internal Helpers ---
