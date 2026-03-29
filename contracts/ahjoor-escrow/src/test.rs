@@ -6,7 +6,7 @@ use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    Address, BytesN, Env, String,
+    Address, BytesN, Env, IntoVal, String, Symbol,
 };
 
 const UPGRADE_WASM: &[u8] = include_bytes!("../../../fixtures/upgrade_contract.wasm");
@@ -156,6 +156,85 @@ fn test_release_escrow_by_arbiter() {
     let escrow = s.client.get_escrow(&escrow_id);
     assert_eq!(escrow.status, EscrowStatus::Released);
     assert_eq!(s.token_client.balance(&seller), 250);
+}
+
+#[test]
+fn test_partial_release_by_buyer() {
+    let s = setup();
+
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+
+    s.client.partial_release(&buyer, &escrow_id, &150);
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::PartiallyReleased);
+    assert_eq!(escrow.amount, 100);
+    assert_eq!(s.token_client.balance(&seller), 150);
+    assert_eq!(s.token_client.balance(&s.client.address), 100);
+}
+
+#[test]
+fn test_double_partial_release_then_full_release_remaining() {
+    let s = setup();
+
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+
+    s.client.partial_release(&buyer, &escrow_id, &100);
+    s.client.partial_release(&arbiter, &escrow_id, &75);
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::PartiallyReleased);
+    assert_eq!(escrow.amount, 75);
+    assert_eq!(s.token_client.balance(&seller), 175);
+    assert_eq!(s.token_client.balance(&s.client.address), 75);
+
+    s.client.release_escrow(&buyer, &escrow_id);
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Released);
+    assert_eq!(escrow.amount, 75);
+    assert_eq!(s.token_client.balance(&seller), 250);
+    assert_eq!(s.token_client.balance(&s.client.address), 0);
+}
+
+#[test]
+fn test_partial_release_over_release_attempt_rejected() {
+    let s = setup();
+
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+
+    let result = s.client.try_partial_release(&buyer, &escrow_id, &251);
+    assert!(result.is_err());
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Active);
+    assert_eq!(escrow.amount, 250);
+    assert_eq!(s.token_client.balance(&seller), 0);
+    assert_eq!(s.token_client.balance(&s.client.address), 250);
 }
 
 #[test]
@@ -466,6 +545,47 @@ fn test_escrow_released_emits_event() {
 
     let events = s.env.events().all();
     assert!(events.len() > 1);
+}
+
+#[test]
+fn test_partial_release_emits_event() {
+    let s = setup();
+
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+
+    s.client.partial_release(&buyer, &escrow_id, &150);
+
+    let events = s.env.events().all();
+    let last = events.last().unwrap();
+
+    let expected_topics = (Symbol::new(&s.env, "partial_released"),).into_val(&s.env);
+    assert_eq!(last.1, expected_topics);
+
+    let data: soroban_sdk::Map<Symbol, soroban_sdk::Val> = last.2.into_val(&s.env);
+    let emitted_escrow_id: u32 = data
+        .get(Symbol::new(&s.env, "escrow_id"))
+        .unwrap()
+        .into_val(&s.env);
+    let released_amount: i128 = data
+        .get(Symbol::new(&s.env, "released_amount"))
+        .unwrap()
+        .into_val(&s.env);
+    let remaining_amount: i128 = data
+        .get(Symbol::new(&s.env, "remaining_amount"))
+        .unwrap()
+        .into_val(&s.env);
+
+    assert_eq!(emitted_escrow_id, escrow_id);
+    assert_eq!(released_amount, 150);
+    assert_eq!(remaining_amount, 100);
 }
 
 // ===========================================================================
@@ -916,17 +1036,19 @@ fn test_recovery_after_resume() {
 fn test_admin_can_add_and_remove_allowed_token() {
     let s = setup();
     let new_token = Address::generate(&s.env);
-    
+
     s.client.add_allowed_token(&s.admin, &new_token);
-    
+
     s.client.remove_allowed_token(&s.admin, &new_token);
-    
+
     let buyer = Address::generate(&s.env);
     let seller = Address::generate(&s.env);
     let arbiter = Address::generate(&s.env);
     let deadline = s.env.ledger().timestamp() + 1000;
-    
-    let res = s.client.try_create_escrow(&buyer, &seller, &arbiter, &100, &new_token, &deadline);
+
+    let res = s
+        .client
+        .try_create_escrow(&buyer, &seller, &arbiter, &100, &new_token, &deadline);
     assert!(res.is_err());
 }
 
@@ -935,10 +1057,10 @@ fn test_non_admin_cannot_add_or_remove_allowed_token() {
     let s = setup();
     let non_admin = Address::generate(&s.env);
     let new_token = Address::generate(&s.env);
-    
+
     let res = s.client.try_add_allowed_token(&non_admin, &new_token);
     assert!(res.is_err());
-    
+
     let res = s.client.try_remove_allowed_token(&non_admin, &s.token_addr);
     assert!(res.is_err());
 }
@@ -948,12 +1070,13 @@ fn test_non_admin_cannot_add_or_remove_allowed_token() {
 fn test_create_escrow_with_disallowed_token_panics_token_not_allowed() {
     let s = setup();
     let unallowed_token = Address::generate(&s.env);
-    
+
     let buyer = Address::generate(&s.env);
     let seller = Address::generate(&s.env);
     let arbiter = Address::generate(&s.env);
     s.token_admin_client.mint(&buyer, &1000);
-    
+
     let deadline = s.env.ledger().timestamp() + 1000;
-    s.client.create_escrow(&buyer, &seller, &arbiter, &250, &unallowed_token, &deadline);
+    s.client
+        .create_escrow(&buyer, &seller, &arbiter, &250, &unallowed_token, &deadline);
 }

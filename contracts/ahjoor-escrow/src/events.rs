@@ -22,6 +22,15 @@ pub struct EscrowReleased {
     pub amount: i128,
 }
 
+/// Event: Escrow partially released to seller
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PartialReleased {
+    pub escrow_id: u32,
+    pub released_amount: i128,
+    pub remaining_amount: i128,
+}
+
 /// Event: Escrow disputed
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -110,7 +119,6 @@ pub struct TokenRemovedFromAllowlist {
     pub token: Address,
 }
 
-
 // --- Helper Emission Functions ---
 
 pub fn emit_escrow_created(
@@ -140,6 +148,20 @@ pub fn emit_escrow_released(e: &Env, escrow_id: u32, seller: Address, amount: i1
         escrow_id,
         seller,
         amount,
+    }
+    .publish(e);
+}
+
+pub fn emit_partial_released(
+    e: &Env,
+    escrow_id: u32,
+    released_amount: i128,
+    remaining_amount: i128,
+) {
+    PartialReleased {
+        escrow_id,
+        released_amount,
+        remaining_amount,
     }
     .publish(e);
 }

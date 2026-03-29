@@ -17,6 +17,7 @@ pub enum EscrowStatus {
     Disputed = 2,
     Resolved = 3,
     Refunded = 4,
+    PartiallyReleased = 5,
 }
 
 #[contracttype]
@@ -167,7 +168,7 @@ impl AhjoorEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .expect("Escrow not found");
 
-        if escrow.status != EscrowStatus::Active {
+        if !Self::is_open_escrow_status(escrow.status) {
             panic!("Escrow is not active");
         }
 
@@ -200,6 +201,63 @@ impl AhjoorEscrowContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
+    /// Release part of the escrowed funds to seller. Can be called by buyer or arbiter.
+    pub fn partial_release(env: Env, caller: Address, escrow_id: u32, release_amount: i128) {
+        Self::require_not_paused(&env);
+        caller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if !Self::is_open_escrow_status(escrow.status) {
+            panic!("Escrow is not active");
+        }
+
+        if caller != escrow.buyer && caller != escrow.arbiter {
+            panic!("Only buyer or arbiter can release escrow");
+        }
+
+        if release_amount <= 0 {
+            panic!("Release amount must be positive");
+        }
+
+        if release_amount > escrow.amount {
+            panic!("Release amount exceeds escrow balance");
+        }
+
+        let client = token::Client::new(&env, &escrow.token);
+        client.transfer(
+            &env.current_contract_address(),
+            &escrow.seller,
+            &release_amount,
+        );
+
+        escrow.amount -= release_amount;
+        escrow.status = if escrow.amount == 0 {
+            EscrowStatus::Released
+        } else {
+            EscrowStatus::PartiallyReleased
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_partial_released(&env, escrow_id, release_amount, escrow.amount);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     /// Dispute an escrow. Can be called by buyer or seller.
     pub fn dispute_escrow(env: Env, caller: Address, escrow_id: u32, reason: String) {
         Self::require_not_paused(&env);
@@ -211,7 +269,7 @@ impl AhjoorEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .expect("Escrow not found");
 
-        if escrow.status != EscrowStatus::Active {
+        if !Self::is_open_escrow_status(escrow.status) {
             panic!("Escrow is not active");
         }
 
@@ -326,7 +384,7 @@ impl AhjoorEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .expect("Escrow not found");
 
-        if escrow.status != EscrowStatus::Active {
+        if !Self::is_open_escrow_status(escrow.status) {
             panic!("Escrow is not active");
         }
 
@@ -381,7 +439,8 @@ impl AhjoorEscrowContract {
             panic!("Only buyer or seller can propose deadline extension");
         }
 
-        if escrow.status == EscrowStatus::Disputed {
+        if escrow.status == EscrowStatus::Disputed || Self::is_terminal_escrow_status(escrow.status)
+        {
             panic!("Cannot extend deadline while escrow is disputed");
         }
 
@@ -431,7 +490,8 @@ impl AhjoorEscrowContract {
             panic!("Only buyer or seller can accept deadline extension");
         }
 
-        if escrow.status == EscrowStatus::Disputed {
+        if escrow.status == EscrowStatus::Disputed || Self::is_terminal_escrow_status(escrow.status)
+        {
             panic!("Cannot extend deadline while escrow is disputed");
         }
 
@@ -673,6 +733,20 @@ impl AhjoorEscrowContract {
         if stored_admin != *admin {
             panic!("Only admin can resume contract");
         }
+    }
+
+    fn is_open_escrow_status(status: EscrowStatus) -> bool {
+        matches!(
+            status,
+            EscrowStatus::Active | EscrowStatus::PartiallyReleased
+        )
+    }
+
+    fn is_terminal_escrow_status(status: EscrowStatus) -> bool {
+        matches!(
+            status,
+            EscrowStatus::Released | EscrowStatus::Resolved | EscrowStatus::Refunded
+        )
     }
 
     fn next_escrow_id(env: &Env) -> u32 {
