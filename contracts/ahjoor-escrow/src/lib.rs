@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, String};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Vec};
 
 // --- Storage TTL Constants ---
 const INSTANCE_LIFETIME_THRESHOLD: u32 = 100_000;
@@ -64,6 +64,9 @@ pub enum DataKey {
     Dispute(u32),
     DeadlineProposal(u32),
     AllowedToken(Address),
+    ArbiterPool,
+    NextArbiterIndex,
+    ArbiterNeedsReplacement(u32),
 }
 
 mod events;
@@ -693,6 +696,170 @@ impl AhjoorEscrowContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Add an arbiter to the pool. Admin only.
+    pub fn add_arbiter(env: Env, admin: Address, arbiter: Address) {
+        Self::require_admin(&env, &admin);
+        let mut pool: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ArbiterPool)
+            .unwrap_or(Vec::new(&env));
+        for i in 0..pool.len() {
+            if pool.get(i).unwrap() == arbiter {
+                panic!("Arbiter already in pool");
+            }
+        }
+        pool.push_back(arbiter.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::ArbiterPool, &pool);
+        events::emit_arbiter_pool_updated(&env, arbiter, true);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Remove an arbiter from the pool. Admin only.
+    /// Active escrows with this arbiter are flagged via ArbiterNeedsReplacement.
+    pub fn remove_arbiter(env: Env, admin: Address, arbiter: Address, escrow_ids: Vec<u32>) {
+        Self::require_admin(&env, &admin);
+        let mut pool: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ArbiterPool)
+            .expect("Arbiter pool is empty");
+        let mut found = false;
+        let mut new_pool: Vec<Address> = Vec::new(&env);
+        for i in 0..pool.len() {
+            let a = pool.get(i).unwrap();
+            if a == arbiter {
+                found = true;
+            } else {
+                new_pool.push_back(a);
+            }
+        }
+        if !found {
+            panic!("Arbiter not in pool");
+        }
+        // Reset index if it would go out of bounds
+        let next_idx: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextArbiterIndex)
+            .unwrap_or(0);
+        if new_pool.is_empty() || next_idx >= new_pool.len() {
+            env.storage()
+                .instance()
+                .set(&DataKey::NextArbiterIndex, &0u32);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ArbiterPool, &new_pool);
+        // Flag active escrows that used this arbiter
+        for i in 0..escrow_ids.len() {
+            let eid = escrow_ids.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(eid))
+            {
+                if escrow.arbiter == arbiter && Self::is_open_escrow_status(escrow.status) {
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::ArbiterNeedsReplacement(eid), &true);
+                }
+            }
+        }
+        events::emit_arbiter_pool_updated(&env, arbiter, false);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Create an escrow with the next arbiter from the pool (round-robin).
+    pub fn create_escrow_with_pool_arbiter(
+        env: Env,
+        buyer: Address,
+        seller: Address,
+        amount: i128,
+        token: Address,
+        deadline: u64,
+    ) -> u32 {
+        Self::require_not_paused(&env);
+        buyer.require_auth();
+
+        let pool: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ArbiterPool)
+            .unwrap_or(Vec::new(&env));
+        if pool.is_empty() {
+            panic!("Arbiter pool is empty");
+        }
+
+        let idx: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::NextArbiterIndex)
+            .unwrap_or(0);
+        let arbiter = pool.get(idx % pool.len()).unwrap();
+        let next_idx = (idx + 1) % pool.len();
+        env.storage()
+            .instance()
+            .set(&DataKey::NextArbiterIndex, &next_idx);
+
+        if amount <= 0 {
+            panic!("Escrow amount must be positive");
+        }
+        if deadline <= env.ledger().timestamp() {
+            panic!("Deadline must be in the future");
+        }
+        let is_allowed = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        if !is_allowed {
+            panic!("TokenNotAllowed");
+        }
+
+        let client = token::Client::new(&env, &token);
+        client.transfer(&buyer, &env.current_contract_address(), &amount);
+
+        let escrow_id = Self::next_escrow_id(&env);
+        let escrow = Escrow {
+            id: escrow_id,
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            arbiter: arbiter.clone(),
+            amount,
+            token: token.clone(),
+            status: EscrowStatus::Active,
+            created_at: env.ledger().timestamp(),
+            deadline,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_escrow_created(
+            &env, escrow_id, buyer, seller, arbiter.clone(), amount, token, deadline,
+        );
+        events::emit_arbiter_assigned(&env, escrow_id, arbiter);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        escrow_id
     }
 
     // --- Internal Helpers ---
