@@ -37,4 +37,8 @@ pub enum Error {
     ExitNotAllowedMidRound = 32,
     /// Contribution rejected because the round deadline has passed.
     ContributionWindowClosed = 33,
+    /// Fee basis points exceeds maximum allowed (500 bps = 5%).
+    FeeExceedsMaximum = 34,
+    /// Max defaults must be at least 1.
+    InvalidMaxDefaults = 35,
 }

@@ -24,6 +24,12 @@ pub struct RoscaConfig {
     pub exit_penalty_bps: u32,
     pub collective_goal: Option<i128>,
     pub member_goals: Option<Map<Address, i128>>,
+    /// Protocol fee in basis points (e.g., 100 = 1%, 500 = 5%). Max 500 bps.
+    pub fee_bps: u32,
+    /// Address that receives protocol fees
+    pub fee_recipient: Option<Address>,
+    /// Number of consecutive missed rounds before suspension (default: 3)
+    pub max_defaults: u32,
 }
 
 #[contracttype]
@@ -169,6 +175,9 @@ pub enum DataKey {
     ProposedAdmin,           // Address — proposed new admin (pending acceptance)
     ContractVersion,         // u32
     MigrationCompleted(u32), // bool
+    FeeBps,                  // u32 — protocol fee in basis points
+    FeeRecipient,            // Address — receives protocol fees
+    MaxDefaults,             // u32 — suspension threshold (consecutive missed rounds)
     // --- Persistent ---
     RoundHistory, // Vec<PayoutRecord> — grows every round
     // --- Temporary ---

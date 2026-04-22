@@ -246,6 +246,32 @@ pub struct RoundCompleted {
     pub payout_amount: i128,
 }
 
+/// Event: Protocol fee collected from round payout
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeCollected {
+    pub round: u32,
+    pub fee_amount: i128,
+    pub fee_recipient: Address,
+}
+
+/// Event: Partial contribution received (installment payment)
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PartialContributionReceived {
+    pub member: Address,
+    pub round: u32,
+    pub amount: i128,
+    pub remaining: i128,
+}
+
+/// Event: Suspension threshold configured
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct SuspensionThresholdSet {
+    pub max_defaults: u32,
+}
+
 /// Event: Round state reset for next round
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -522,4 +548,27 @@ pub fn emit_contract_upgraded(e: &Env, old_version: u32, new_version: u32, by_ad
         by_admin,
     }
     .publish(e);
+}
+
+pub fn emit_fee_collected(e: &Env, round: u32, fee_amount: i128, fee_recipient: Address) {
+    FeeCollected {
+        round,
+        fee_amount,
+        fee_recipient,
+    }
+    .publish(e);
+}
+
+pub fn emit_partial_contribution(e: &Env, member: Address, round: u32, amount: i128, remaining: i128) {
+    PartialContributionReceived {
+        member,
+        round,
+        amount,
+        remaining,
+    }
+    .publish(e);
+}
+
+pub fn emit_suspension_threshold_set(e: &Env, max_defaults: u32) {
+    SuspensionThresholdSet { max_defaults }.publish(e);
 }
