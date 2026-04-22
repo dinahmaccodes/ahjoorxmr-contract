@@ -296,6 +296,7 @@ fn test_dispute_escrow_by_buyer() {
         &buyer,
         &escrow_id,
         &String::from_str(&s.env, "Item not received"),
+        &250,
     );
 
     let escrow = s.client.get_escrow(&escrow_id);
@@ -323,6 +324,7 @@ fn test_dispute_escrow_by_seller() {
         &seller,
         &escrow_id,
         &String::from_str(&s.env, "Payment not received"),
+        &250,
     );
 
     let escrow = s.client.get_escrow(&escrow_id);
@@ -345,7 +347,172 @@ fn test_dispute_escrow_by_arbiter_panics() {
             .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
     s.client
-        .dispute_escrow(&arbiter, &escrow_id, &String::from_str(&s.env, "Invalid"));
+        .dispute_escrow(&arbiter, &escrow_id, &String::from_str(&s.env, "Invalid"), &250);
+}
+
+// ===========================================================================
+//  Partial Dispute Tests
+// ===========================================================================
+
+#[test]
+fn test_partial_dispute_50_50_split() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+
+    // Dispute only 100 (50%), undisputed 100 released to seller immediately
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Half disputed"),
+        &100,
+    );
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::PartiallyDisputed);
+    assert_eq!(escrow.amount, 100); // only disputed portion held
+    assert_eq!(s.token_client.balance(&seller), 100); // undisputed released
+    assert_eq!(s.token_client.balance(&s.client.address), 100);
+
+    let dispute = s.client.get_dispute(&escrow_id);
+    assert_eq!(dispute.dispute_amount, 100);
+    assert_eq!(dispute.resolved, false);
+
+    // Arbiter resolves the disputed portion to seller
+    s.client.resolve_dispute(&arbiter, &escrow_id, &true);
+    assert_eq!(s.token_client.balance(&seller), 200);
+    assert_eq!(s.token_client.balance(&s.client.address), 0);
+}
+
+#[test]
+fn test_partial_dispute_80_20_split() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+
+    // Dispute only 20 (20%), undisputed 80 released to seller immediately
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Minor issue"),
+        &20,
+    );
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::PartiallyDisputed);
+    assert_eq!(escrow.amount, 20);
+    assert_eq!(s.token_client.balance(&seller), 80);
+    assert_eq!(s.token_client.balance(&s.client.address), 20);
+
+    // Arbiter refunds the disputed portion to buyer
+    s.client.resolve_dispute(&arbiter, &escrow_id, &false);
+    assert_eq!(s.token_client.balance(&buyer), 920); // 1000 - 100 deposited + 20 refunded
+    assert_eq!(s.token_client.balance(&s.client.address), 0);
+}
+
+#[test]
+fn test_full_dispute_still_works() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+
+    // Full dispute: dispute_amount == escrow amount
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Full dispute"),
+        &250,
+    );
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Disputed);
+    assert_eq!(escrow.amount, 250);
+    assert_eq!(s.token_client.balance(&seller), 0); // nothing released
+    assert_eq!(s.token_client.balance(&s.client.address), 250);
+}
+
+#[test]
+fn test_partial_dispute_amount_exceeds_escrow_rejected() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+
+    let result = s.client.try_dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Over dispute"),
+        &101,
+    );
+    assert!(result.is_err());
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.status, EscrowStatus::Active);
+}
+
+#[test]
+fn test_partial_dispute_emits_partial_dispute_raised_event() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Partial"),
+        &120,
+    );
+
+    let events = s.env.events().all();
+    let last = events.last().unwrap();
+    let expected_topics = (Symbol::new(&s.env, "partial_dispute_raised"),).into_val(&s.env);
+    assert_eq!(last.1, expected_topics);
+
+    let data: soroban_sdk::Map<Symbol, soroban_sdk::Val> = last.2.into_val(&s.env);
+    let dispute_amount: i128 = data
+        .get(Symbol::new(&s.env, "dispute_amount"))
+        .unwrap()
+        .into_val(&s.env);
+    let released_amount: i128 = data
+        .get(Symbol::new(&s.env, "released_amount"))
+        .unwrap()
+        .into_val(&s.env);
+    assert_eq!(dispute_amount, 120);
+    assert_eq!(released_amount, 80);
 }
 
 // ===========================================================================
@@ -370,6 +537,7 @@ fn test_resolve_dispute_to_seller() {
         &buyer,
         &escrow_id,
         &String::from_str(&s.env, "Item not received"),
+        &250,
     );
     s.client.resolve_dispute(&arbiter, &escrow_id, &true);
 
@@ -400,6 +568,7 @@ fn test_resolve_dispute_to_buyer() {
         &seller,
         &escrow_id,
         &String::from_str(&s.env, "Payment not received"),
+        &250,
     );
     s.client.resolve_dispute(&arbiter, &escrow_id, &false);
 
@@ -428,6 +597,7 @@ fn test_resolve_dispute_by_buyer_panics() {
         &buyer,
         &escrow_id,
         &String::from_str(&s.env, "Item not received"),
+        &250,
     );
     s.client.resolve_dispute(&buyer, &escrow_id, &true);
 }
@@ -498,6 +668,7 @@ fn test_auto_release_disputed_panics() {
         &buyer,
         &escrow_id,
         &String::from_str(&s.env, "Item not received"),
+        &250,
     );
 
     // Advance time past deadline
@@ -828,7 +999,7 @@ fn test_write_functions_blocked_when_paused_reads_still_work() {
             .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
 
     s.client
-        .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "snapshot"));
+        .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "snapshot"), &200);
 
     let events = s.env.events().all();
     assert!(!events.is_empty());
@@ -988,7 +1159,7 @@ fn test_dispute_blocks_deadline_extension() {
     );
 
     s.client
-        .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Need review"));
+        .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Need review"), &250);
 
     let result =
         s.client

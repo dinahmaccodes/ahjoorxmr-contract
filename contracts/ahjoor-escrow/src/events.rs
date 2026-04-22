@@ -40,6 +40,15 @@ pub struct EscrowDisputed {
     pub reason: String,
 }
 
+/// Event: Partial dispute raised — undisputed portion released to seller
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PartialDisputeRaised {
+    pub escrow_id: u32,
+    pub dispute_amount: i128,
+    pub released_amount: i128,
+}
+
 /// Event: Dispute resolved
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -171,6 +180,20 @@ pub fn emit_escrow_disputed(e: &Env, escrow_id: u32, disputer: Address, reason: 
         escrow_id,
         disputer,
         reason,
+    }
+    .publish(e);
+}
+
+pub fn emit_partial_dispute_raised(
+    e: &Env,
+    escrow_id: u32,
+    dispute_amount: i128,
+    released_amount: i128,
+) {
+    PartialDisputeRaised {
+        escrow_id,
+        dispute_amount,
+        released_amount,
     }
     .publish(e);
 }

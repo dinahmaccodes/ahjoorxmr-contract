@@ -18,6 +18,7 @@ pub enum EscrowStatus {
     Resolved = 3,
     Refunded = 4,
     PartiallyReleased = 5,
+    PartiallyDisputed = 6,
 }
 
 #[contracttype]
@@ -41,6 +42,7 @@ pub struct Dispute {
     pub reason: String,
     pub created_at: u64,
     pub resolved: bool,
+    pub dispute_amount: i128,
 }
 
 #[contracttype]
@@ -259,7 +261,15 @@ impl AhjoorEscrowContract {
     }
 
     /// Dispute an escrow. Can be called by buyer or seller.
-    pub fn dispute_escrow(env: Env, caller: Address, escrow_id: u32, reason: String) {
+    /// Pass `dispute_amount` equal to the full escrow amount for a full dispute,
+    /// or less for a partial dispute (undisputed portion is released to seller immediately).
+    pub fn dispute_escrow(
+        env: Env,
+        caller: Address,
+        escrow_id: u32,
+        reason: String,
+        dispute_amount: i128,
+    ) {
         Self::require_not_paused(&env);
         caller.require_auth();
 
@@ -277,7 +287,28 @@ impl AhjoorEscrowContract {
             panic!("Only buyer or seller can dispute escrow");
         }
 
-        escrow.status = EscrowStatus::Disputed;
+        if dispute_amount <= 0 || dispute_amount > escrow.amount {
+            panic!("dispute_amount must be > 0 and <= escrow amount");
+        }
+
+        let released_amount = escrow.amount - dispute_amount;
+
+        // Release undisputed portion to seller immediately
+        if released_amount > 0 {
+            let client = token::Client::new(&env, &escrow.token);
+            client.transfer(
+                &env.current_contract_address(),
+                &escrow.seller,
+                &released_amount,
+            );
+        }
+
+        escrow.amount = dispute_amount;
+        escrow.status = if released_amount > 0 {
+            EscrowStatus::PartiallyDisputed
+        } else {
+            EscrowStatus::Disputed
+        };
 
         env.storage()
             .persistent()
@@ -293,6 +324,7 @@ impl AhjoorEscrowContract {
             reason: reason.clone(),
             created_at: env.ledger().timestamp(),
             resolved: false,
+            dispute_amount,
         };
         env.storage()
             .persistent()
@@ -303,7 +335,16 @@ impl AhjoorEscrowContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
-        events::emit_escrow_disputed(&env, escrow_id, caller, reason);
+        if released_amount > 0 {
+            events::emit_partial_dispute_raised(
+                &env,
+                escrow_id,
+                dispute_amount,
+                released_amount,
+            );
+        } else {
+            events::emit_escrow_disputed(&env, escrow_id, caller, reason);
+        }
 
         env.storage()
             .instance()
@@ -321,7 +362,9 @@ impl AhjoorEscrowContract {
             .get(&DataKey::Escrow(escrow_id))
             .expect("Escrow not found");
 
-        if escrow.status != EscrowStatus::Disputed {
+        if escrow.status != EscrowStatus::Disputed
+            && escrow.status != EscrowStatus::PartiallyDisputed
+        {
             panic!("Escrow is not disputed");
         }
 
@@ -739,6 +782,13 @@ impl AhjoorEscrowContract {
         matches!(
             status,
             EscrowStatus::Active | EscrowStatus::PartiallyReleased
+        )
+    }
+
+    fn is_disputed_status(status: EscrowStatus) -> bool {
+        matches!(
+            status,
+            EscrowStatus::Disputed | EscrowStatus::PartiallyDisputed
         )
     }
 
