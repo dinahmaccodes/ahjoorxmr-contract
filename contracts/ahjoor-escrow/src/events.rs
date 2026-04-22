@@ -251,3 +251,51 @@ pub fn emit_token_allowlisted(e: &Env, admin: Address, token: Address) {
 pub fn emit_token_removed_from_allowlist(e: &Env, admin: Address, token: Address) {
     TokenRemovedFromAllowlist { admin, token }.publish(e);
 }
+
+/// Event: Escrow template created
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowTemplateCreated {
+    pub template_id: u32,
+    pub creator: Address,
+}
+
+/// Event: Escrow template config updated
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowTemplateUpdated {
+    pub template_id: u32,
+    pub creator: Address,
+}
+
+/// Event: Escrow template deactivated
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowTemplateDeactivated {
+    pub template_id: u32,
+    pub creator: Address,
+}
+
+/// Event: Escrow created from a template
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowCreatedFromTemplate {
+    pub escrow_id: u32,
+    pub template_id: u32,
+}
+
+pub fn emit_escrow_template_created(e: &Env, template_id: u32, creator: Address) {
+    EscrowTemplateCreated { template_id, creator }.publish(e);
+}
+
+pub fn emit_escrow_template_updated(e: &Env, template_id: u32, creator: Address) {
+    EscrowTemplateUpdated { template_id, creator }.publish(e);
+}
+
+pub fn emit_escrow_template_deactivated(e: &Env, template_id: u32, creator: Address) {
+    EscrowTemplateDeactivated { template_id, creator }.publish(e);
+}
+
+pub fn emit_escrow_created_from_template(e: &Env, escrow_id: u32, template_id: u32) {
+    EscrowCreatedFromTemplate { escrow_id, template_id }.publish(e);
+}
