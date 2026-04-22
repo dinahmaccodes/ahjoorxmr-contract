@@ -119,6 +119,22 @@ pub struct TokenRemovedFromAllowlist {
     pub token: Address,
 }
 
+/// Event: Arbiter added to or removed from the pool
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ArbiterPoolUpdated {
+    pub arbiter: Address,
+    pub added: bool,
+}
+
+/// Event: Arbiter assigned to an escrow via pool round-robin
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ArbiterAssigned {
+    pub escrow_id: u32,
+    pub arbiter: Address,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_escrow_created(
@@ -298,4 +314,10 @@ pub fn emit_escrow_template_deactivated(e: &Env, template_id: u32, creator: Addr
 
 pub fn emit_escrow_created_from_template(e: &Env, escrow_id: u32, template_id: u32) {
     EscrowCreatedFromTemplate { escrow_id, template_id }.publish(e);
+pub fn emit_arbiter_pool_updated(e: &Env, arbiter: Address, added: bool) {
+    ArbiterPoolUpdated { arbiter, added }.publish(e);
+}
+
+pub fn emit_arbiter_assigned(e: &Env, escrow_id: u32, arbiter: Address) {
+    ArbiterAssigned { escrow_id, arbiter }.publish(e);
 }
