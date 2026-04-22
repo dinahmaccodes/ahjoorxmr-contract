@@ -1083,11 +1083,9 @@ fn test_deadline_extension_same_party_accept_rejected() {
     s.token_admin_client.mint(&buyer, &1000);
 
     let initial_deadline = s.env.ledger().timestamp() + 1000;
-    let admin = Address::generate(&s.env);
 
     s.token_admin_client.mint(&buyer, &1000);
 
-    let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id = s.client.create_escrow(
         &buyer,
         &seller,

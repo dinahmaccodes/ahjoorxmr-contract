@@ -66,7 +66,11 @@ pub enum DataKey {
     Dispute(u32),
     DeadlineProposal(u32),
     AllowedToken(Address),
+    ProtocolFeeBps,
+    FeeRecipient,
 }
+
+const MAX_PROTOCOL_FEE_BPS: u32 = 200; // 2%
 
 mod events;
 
@@ -374,18 +378,42 @@ impl AhjoorEscrowContract {
 
         let client = token::Client::new(&env, &escrow.token);
 
+        // Compute and deduct protocol fee
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProtocolFeeBps)
+            .unwrap_or(0);
+        let protocol_fee = (escrow.amount * fee_bps as i128) / 10_000;
+
+        if protocol_fee > 0 {
+            let fee_recipient: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::FeeRecipient)
+                .expect("FeeRecipient not set");
+            client.transfer(
+                &env.current_contract_address(),
+                &fee_recipient,
+                &protocol_fee,
+            );
+            events::emit_protocol_fee_paid(&env, escrow_id, protocol_fee, fee_recipient);
+        }
+
+        let winner_amount = escrow.amount - protocol_fee;
+
         if release_to_seller {
             client.transfer(
                 &env.current_contract_address(),
                 &escrow.seller,
-                &escrow.amount,
+                &winner_amount,
             );
             escrow.status = EscrowStatus::Released;
         } else {
             client.transfer(
                 &env.current_contract_address(),
                 &escrow.buyer,
-                &escrow.amount,
+                &winner_amount,
             );
             escrow.status = EscrowStatus::Refunded;
         }
@@ -416,6 +444,43 @@ impl AhjoorEscrowContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Set protocol fee in basis points and fee recipient. Admin only.
+    /// Max fee is 200 bps (2%).
+    pub fn update_protocol_fee(
+        env: Env,
+        admin: Address,
+        fee_bps: u32,
+        fee_recipient: Address,
+    ) {
+        Self::require_admin(&env, &admin);
+        if fee_bps > MAX_PROTOCOL_FEE_BPS {
+            panic!("Fee exceeds maximum of 200 bps");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ProtocolFeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeRecipient, &fee_recipient);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get current protocol fee bps and fee recipient.
+    pub fn get_protocol_fee(env: Env) -> (u32, Option<Address>) {
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProtocolFeeBps)
+            .unwrap_or(0);
+        let fee_recipient: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeRecipient);
+        (fee_bps, fee_recipient)
     }
 
     /// Auto-release expired escrow (past deadline, undisputed). Can be called by buyer.
@@ -785,12 +850,7 @@ impl AhjoorEscrowContract {
         )
     }
 
-    fn is_disputed_status(status: EscrowStatus) -> bool {
-        matches!(
-            status,
-            EscrowStatus::Disputed | EscrowStatus::PartiallyDisputed
-        )
-    }
+
 
     fn is_terminal_escrow_status(status: EscrowStatus) -> bool {
         matches!(
