@@ -64,6 +64,13 @@ const DEFAULT_RATE_LIMIT_WINDOW_SIZE_LEDGERS: u32 = 1;
 const ORACLE_PRICE_PRECISION: i128 = 10_000_000;
 /// Ledger sequences per weekly bucket (~7 days at 5s/ledger = 120_960 ledgers)
 const LEDGER_BUCKET_SIZE: u32 = 120_960;
+/// Maximum protocol fee: 500 bps = 5%
+const MAX_FEE_BPS: u32 = 500;
+/// Default protocol fee: 0 bps (no fee initially)
+const DEFAULT_FEE_BPS: u32 = 0;
+/// Idempotency key TTL: 24 hours in ledgers (~17,280 ledgers at 5s/ledger)
+const IDEMPOTENCY_KEY_LIFETIME_THRESHOLD: u32 = 10_000;
+const IDEMPOTENCY_KEY_BUMP_AMOUNT: u32 = 17_280;
 
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,12 +183,12 @@ pub struct CustomerRateLimit {
 
 /// Storage key classification:
 /// - Instance:    Admin, PaymentCounter, MaxBatchSize, DisputeTimeout,
-///                OracleAddress, UsdcToken
+///                OracleAddress, UsdcToken, FeeBps, FeeRecipient
 ///                (config/counters — bounded, shared TTL with contract)
 /// - Persistent:  Payment(u32), CustomerPayments(Address), Settled(u32)
 ///                (per-record data — unbounded, individual TTL)
-/// - Temporary:   Dispute(u32)
-///                (in-progress dispute state — short-lived, auto-expires)
+/// - Temporary:   Dispute(u32), IdempotencyKey(BytesN<32>)
+///                (in-progress dispute state, idempotency keys — short-lived, auto-expires)
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
@@ -214,6 +221,10 @@ pub enum DataKey {
     ContractVersion,
     /// Migration completion flag for a specific version
     MigrationCompleted(u32),
+    /// Protocol fee in basis points (1 bps = 0.01%)
+    FeeBps,
+    /// Address that receives protocol fees
+    FeeRecipient,
     // --- Persistent ---
     Payment(u32),
     CustomerPayments(Address),
@@ -239,6 +250,8 @@ pub enum DataKey {
     VolumeBucket(Address, u32),
     // --- Temporary ---
     Dispute(u32),
+    /// Temporary: idempotency key → payment_id mapping (expires after 24h)
+    IdempotencyKey(BytesN<32>),
 }
 
 mod events;
@@ -250,9 +263,15 @@ pub struct AhjoorPaymentsContract;
 impl AhjoorPaymentsContract {
     /// One-time contract initialization.
     /// Admin, counters, and config go to instance storage.
-    pub fn initialize(env: Env, admin: Address) {
+    /// fee_recipient: Address that receives protocol fees
+    /// fee_bps: Protocol fee in basis points (max 500 = 5%)
+    pub fn initialize(env: Env, admin: Address, fee_recipient: Address, fee_bps: u32) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
+        }
+
+        if fee_bps > MAX_FEE_BPS {
+            panic!("Fee cannot exceed 500 bps (5%)");
         }
 
         // Instance: config and counters
@@ -277,6 +296,10 @@ impl AhjoorPaymentsContract {
             .instance()
             .set(&DataKey::ContractVersion, &1u32);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeRecipient, &fee_recipient);
 
         env.storage()
             .instance()
@@ -288,6 +311,7 @@ impl AhjoorPaymentsContract {
     /// Rejects unapproved merchants unless open mode is enabled (#58).
     /// Sets expiry based on global payment timeout (#54).
     /// Accepts optional reference (max 64 bytes) and metadata (max 5 keys) (#67).
+    /// Accepts optional idempotency_key to prevent duplicate payments.
     /// Returns the new payment ID.
     pub fn create_payment(
         env: Env,
@@ -297,9 +321,23 @@ impl AhjoorPaymentsContract {
         token: Address,
         reference: Option<String>,
         metadata: Option<Map<String, String>>,
+        idempotency_key: Option<BytesN<32>>,
     ) -> u32 {
         Self::require_not_paused(&env);
         customer.require_auth();
+
+        // Check idempotency key first
+        if let Some(ref key) = idempotency_key {
+            if let Some(existing_payment_id) = env
+                .storage()
+                .temporary()
+                .get::<DataKey, u32>(&DataKey::IdempotencyKey(key.clone()))
+            {
+                // Key exists, return existing payment ID
+                return existing_payment_id;
+            }
+        }
+
         Self::enforce_rate_limit(&env, &customer, 1);
 
         if amount <= 0 {
@@ -353,6 +391,18 @@ impl AhjoorPaymentsContract {
         // Index by merchant+reference if provided (#67)
         if let Some(ref r) = reference {
             Self::index_payment_by_reference(&env, &merchant, r, payment_id);
+        }
+
+        // Store idempotency key if provided
+        if let Some(key) = idempotency_key {
+            env.storage()
+                .temporary()
+                .set(&DataKey::IdempotencyKey(key.clone()), &payment_id);
+            env.storage().temporary().extend_ttl(
+                &DataKey::IdempotencyKey(key),
+                IDEMPOTENCY_KEY_LIFETIME_THRESHOLD,
+                IDEMPOTENCY_KEY_BUMP_AMOUNT,
+            );
         }
 
         // Update stats (#70)
@@ -475,7 +525,8 @@ impl AhjoorPaymentsContract {
     }
 
     /// Admin marks a payment as completed and ready for merchant settlement.
-    /// Funds remain in escrow until `settle_merchant_payments`.
+    /// Deducts protocol fee from payment amount.
+    /// Fee is transferred to fee_recipient, remaining amount stays in escrow for merchant.
     pub fn complete_payment(env: Env, payment_id: u32) {
         Self::require_not_paused(&env);
         let admin: Address = env
@@ -500,8 +551,43 @@ impl AhjoorPaymentsContract {
             panic!("Payment has expired");
         }
 
+        // Calculate and deduct protocol fee
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(DEFAULT_FEE_BPS);
+        let fee_recipient: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeRecipient)
+            .expect("Fee recipient not configured");
+
+        let fee_amount = (payment.amount * fee_bps as i128) / 10_000;
+        let merchant_amount = payment.amount - fee_amount;
+
+        // Transfer fee to fee_recipient if fee > 0
+        if fee_amount > 0 {
+            let client = token::Client::new(&env, &payment.token);
+            client.transfer(
+                &env.current_contract_address(),
+                &fee_recipient,
+                &fee_amount,
+            );
+
+            events::emit_fee_collected(
+                &env,
+                payment_id,
+                fee_amount,
+                fee_recipient.clone(),
+                payment.token.clone(),
+            );
+        }
+
         let old_status = payment.status;
         payment.status = PaymentStatus::Completed;
+        // Update payment amount to reflect merchant's net amount after fee
+        payment.amount = merchant_amount;
         let completed_at = env.ledger().timestamp();
 
         // Extend TTL on update so completed records survive long-term
@@ -529,7 +615,7 @@ impl AhjoorPaymentsContract {
             payment_id,
             &payment.customer,
             &payment.merchant,
-            payment.amount,
+            merchant_amount,
             &payment.token,
             completed_at,
         );
@@ -546,16 +632,16 @@ impl AhjoorPaymentsContract {
             &env,
             payment_id,
             payment.merchant.clone(),
-            payment.amount,
+            merchant_amount,
             completed_at,
         );
         events::emit_payment_status_changed(&env, payment_id, old_status, PaymentStatus::Completed);
         events::emit_payment_receipt_issued(&env, payment_id, receipt_hash);
 
-        // Update stats (#70)
-        Self::inc_global_completed(&env, &payment.token, payment.amount);
-        Self::inc_merchant_completed(&env, &payment.merchant, &payment.token, payment.amount);
-        Self::inc_volume_bucket(&env, &payment.token, payment.amount);
+        // Update stats (#70) - use merchant_amount for volume tracking
+        Self::inc_global_completed(&env, &payment.token, merchant_amount);
+        Self::inc_merchant_completed(&env, &payment.merchant, &payment.token, merchant_amount);
+        Self::inc_volume_bucket(&env, &payment.token, merchant_amount);
 
         env.storage()
             .instance()
@@ -1129,6 +1215,65 @@ impl AhjoorPaymentsContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeTimeout, &timeout);
+    }
+
+    /// Admin updates the protocol fee. Maximum allowed is 500 bps (5%).
+    pub fn update_fee(env: Env, admin: Address, new_fee_bps: u32) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can update fee");
+        }
+        if new_fee_bps > MAX_FEE_BPS {
+            panic!("Fee cannot exceed 500 bps (5%)");
+        }
+
+        env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Admin updates the fee recipient address.
+    pub fn update_fee_recipient(env: Env, admin: Address, new_fee_recipient: Address) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can update fee recipient");
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeRecipient, &new_fee_recipient);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the current protocol fee in basis points.
+    pub fn get_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(DEFAULT_FEE_BPS)
+    }
+
+    /// Get the current fee recipient address.
+    pub fn get_fee_recipient(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeRecipient)
+            .expect("Fee recipient not configured")
     }
 
     /// Admin updates global per-customer payment rate limit settings.

@@ -9,6 +9,16 @@ pub struct PaymentReceiptIssued {
     pub receipt_hash: BytesN<32>,
 }
 
+/// Event: Protocol fee collected on payment completion
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FeeCollected {
+    pub payment_id: u32,
+    pub fee_amount: i128,
+    pub fee_recipient: Address,
+    pub token: Address,
+}
+
 /// Event: Multi-token payment created (customer paid in non-USDC token)
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -390,6 +400,22 @@ pub fn emit_payment_receipt_issued(e: &Env, payment_id: u32, receipt_hash: Bytes
     PaymentReceiptIssued {
         payment_id,
         receipt_hash,
+    }
+    .publish(e);
+}
+
+pub fn emit_fee_collected(
+    e: &Env,
+    payment_id: u32,
+    fee_amount: i128,
+    fee_recipient: Address,
+    token: Address,
+) {
+    FeeCollected {
+        payment_id,
+        fee_amount,
+        fee_recipient,
+        token,
     }
     .publish(e);
 }
