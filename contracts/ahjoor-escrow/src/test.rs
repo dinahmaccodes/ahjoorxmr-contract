@@ -2080,3 +2080,108 @@ fn test_auto_renew_fails_with_insufficient_allowance() {
     let result = s.client.try_release_escrow(&buyer, &second_id);
     assert!(result.is_err());
 }
+
+// ===========================================================================
+//  Issue #141: Evidence Hash Anchoring Tests
+// ===========================================================================
+
+#[test]
+fn test_submit_and_retrieve_evidence_hashes() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+
+    s.env.mock_all_auths();
+    s.token_admin_client.mint(&buyer, &500);
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &500,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let hash1 = BytesN::from_array(&s.env, &[0x01u8; 32]);
+    let uri1 = BytesN::from_array(&s.env, &[0xAAu8; 32]);
+    s.client.submit_evidence(&buyer, &escrow_id, &hash1, &uri1);
+
+    let hash2 = BytesN::from_array(&s.env, &[0x02u8; 32]);
+    let uri2 = BytesN::from_array(&s.env, &[0xBBu8; 32]);
+    s.client.submit_evidence(&seller, &escrow_id, &hash2, &uri2);
+
+    let evidence = s.client.get_evidence(&escrow_id);
+    assert_eq!(evidence.len(), 2);
+
+    let (addr0, entries0) = evidence.get(0).unwrap();
+    assert_eq!(addr0, buyer);
+    assert_eq!(entries0.len(), 1);
+    assert_eq!(entries0.get(0).unwrap().evidence_hash, hash1);
+
+    let (addr1, entries1) = evidence.get(1).unwrap();
+    assert_eq!(addr1, seller);
+    assert_eq!(entries1.len(), 1);
+    assert_eq!(entries1.get(0).unwrap().evidence_hash, hash2);
+}
+
+#[test]
+#[should_panic(expected = "Maximum evidence entries reached")]
+fn test_evidence_over_limit_rejected() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+
+    s.env.mock_all_auths();
+    s.token_admin_client.mint(&buyer, &500);
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &500,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let base_hash = BytesN::from_array(&s.env, &[0x01u8; 32]);
+    let uri = BytesN::from_array(&s.env, &[0xAAu8; 32]);
+    // 5 is the max; 6th should panic
+    for _ in 0..6 {
+        s.client.submit_evidence(&buyer, &escrow_id, &base_hash, &uri);
+    }
+}
+
+#[test]
+#[should_panic(expected = "Only buyer or seller can submit evidence")]
+fn test_only_parties_can_submit_evidence() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let outsider = Address::generate(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+
+    s.env.mock_all_auths();
+    s.token_admin_client.mint(&buyer, &500);
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &500,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let hash = BytesN::from_array(&s.env, &[0x01u8; 32]);
+    let uri = BytesN::from_array(&s.env, &[0xAAu8; 32]);
+    s.client.submit_evidence(&outsider, &escrow_id, &hash, &uri);
+}

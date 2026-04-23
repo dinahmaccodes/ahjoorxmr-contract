@@ -383,6 +383,17 @@ pub fn emit_arbiter_assigned(e: &Env, escrow_id: u32, arbiter: Address) {
     ArbiterAssigned { escrow_id, arbiter }.publish(e);
 }
 
+// --- Issue #141: Evidence Hash Anchoring ---
+
+/// Event: Evidence hash submitted for a dispute
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EvidenceSubmitted {
+    pub escrow_id: u32,
+    pub party: Address,
+    pub evidence_hash: BytesN<32>,
+}
+
 pub fn emit_evidence_submitted(e: &Env, escrow_id: u32, party: Address, evidence_hash: BytesN<32>) {
     EvidenceSubmitted {
         escrow_id,
