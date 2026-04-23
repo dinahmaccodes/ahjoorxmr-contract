@@ -75,6 +75,33 @@ pub struct RefundAutoApproved {
     pub amount: i128,
 }
 
+/// Event: Refund auto-approved via whitelist
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct RefundAutoApprovedWhitelist {
+    pub refund_id: u32,
+    pub merchant: Address,
+    pub amount: i128,
+}
+
+/// Event: Escrow refund registered
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowRefundRegistered {
+    pub refund_id: u32,
+    pub escrow_id: u32,
+    pub buyer: Address,
+    pub amount: i128,
+}
+
+/// Event: Refund fee collected
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct RefundFeeCollected {
+    pub refund_id: u32,
+    pub fee_amount: i128,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_refund_requested(
@@ -164,4 +191,37 @@ pub fn emit_contract_paused(e: &Env, admin: Address, reason: String, timestamp: 
 
 pub fn emit_contract_resumed(e: &Env, admin: Address, timestamp: u64) {
     ContractResumed { admin, timestamp }.publish(e);
+}
+
+pub fn emit_refund_auto_approved_whitelist(e: &Env, refund_id: u32, merchant: Address, amount: i128) {
+    RefundAutoApprovedWhitelist {
+        refund_id,
+        merchant,
+        amount,
+    }
+    .publish(e);
+}
+
+pub fn emit_escrow_refund_registered(
+    e: &Env,
+    refund_id: u32,
+    escrow_id: u32,
+    buyer: Address,
+    amount: i128,
+) {
+    EscrowRefundRegistered {
+        refund_id,
+        escrow_id,
+        buyer,
+        amount,
+    }
+    .publish(e);
+}
+
+pub fn emit_refund_fee_collected(e: &Env, refund_id: u32, fee_amount: i128) {
+    RefundFeeCollected {
+        refund_id,
+        fee_amount,
+    }
+    .publish(e);
 }
