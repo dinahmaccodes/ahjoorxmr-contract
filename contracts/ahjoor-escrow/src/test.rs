@@ -2240,3 +2240,198 @@ fn test_auto_renew_fails_with_insufficient_allowance() {
     assert!(result.is_err());
 }
 
+fn make_batch_config(
+    env: &Env,
+    seller: Address,
+    arbiter: Address,
+    amount: i128,
+    token: Address,
+    deadline: u64,
+) -> EscrowBatchConfig {
+    EscrowBatchConfig {
+        seller,
+        arbiter,
+        amount,
+        token,
+        deadline,
+        metadata_hash: None,
+        sellers: Vec::new(env),
+        auto_renew: false,
+        renewal_count: 0,
+    }
+}
+
+#[test]
+fn test_create_escrows_batch_max_size_contiguous_and_events() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &20_000);
+
+    let mut configs: Vec<EscrowBatchConfig> = Vec::new(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+    for _ in 0..10 {
+        configs.push_back(make_batch_config(
+            &s.env,
+            Address::generate(&s.env),
+            Address::generate(&s.env),
+            100,
+            s.token_addr.clone(),
+            deadline,
+        ));
+    }
+
+    let ids = s.client.create_escrows_batch(&buyer, &configs);
+    assert_eq!(ids.len(), 10);
+    for i in 0..ids.len() {
+        assert_eq!(ids.get(i).unwrap(), i);
+    }
+
+    let events = s.env.events().all();
+    let created_topic = (Symbol::new(&s.env, "escrow_created"),).into_val(&s.env);
+    let mut created_count: u32 = 0;
+    for i in 0..events.len() {
+        let evt = events.get(i).unwrap();
+        if evt.1 == created_topic {
+            created_count += 1;
+        }
+    }
+    assert_eq!(created_count, 10);
+
+    let batch_topic = (Symbol::new(&s.env, "batch_escrow_created"),).into_val(&s.env);
+    let summary = events
+        .iter()
+        .find(|e| e.1 == batch_topic)
+        .expect("Expected batch summary event");
+
+    let summary_data: soroban_sdk::Map<Symbol, soroban_sdk::Val> = summary.2.into_val(&s.env);
+    let count: u32 = summary_data
+        .get(Symbol::new(&s.env, "count"))
+        .unwrap()
+        .into_val(&s.env);
+    let first_id: u32 = summary_data
+        .get(Symbol::new(&s.env, "first_id"))
+        .unwrap()
+        .into_val(&s.env);
+    let last_id: u32 = summary_data
+        .get(Symbol::new(&s.env, "last_id"))
+        .unwrap()
+        .into_val(&s.env);
+
+    assert_eq!(count, 10);
+    assert_eq!(first_id, 0);
+    assert_eq!(last_id, 9);
+}
+
+#[test]
+fn test_create_escrows_batch_rejects_above_cap() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &20_000);
+
+    let mut configs: Vec<EscrowBatchConfig> = Vec::new(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+    for _ in 0..11 {
+        configs.push_back(make_batch_config(
+            &s.env,
+            Address::generate(&s.env),
+            Address::generate(&s.env),
+            50,
+            s.token_addr.clone(),
+            deadline,
+        ));
+    }
+
+    let res = s.client.try_create_escrows_batch(&buyer, &configs);
+    assert!(res.is_err());
+    assert_eq!(s.client.get_escrow_counter(), 0);
+    assert_eq!(s.token_client.balance(&buyer), 20_000);
+}
+
+#[test]
+fn test_create_escrows_batch_invalid_config_reverts_entire_batch() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &20_000);
+
+    let mut configs: Vec<EscrowBatchConfig> = Vec::new(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+
+    configs.push_back(make_batch_config(
+        &s.env,
+        Address::generate(&s.env),
+        Address::generate(&s.env),
+        100,
+        s.token_addr.clone(),
+        deadline,
+    ));
+    configs.push_back(make_batch_config(
+        &s.env,
+        Address::generate(&s.env),
+        Address::generate(&s.env),
+        0,
+        s.token_addr.clone(),
+        deadline,
+    ));
+    configs.push_back(make_batch_config(
+        &s.env,
+        Address::generate(&s.env),
+        Address::generate(&s.env),
+        100,
+        s.token_addr.clone(),
+        deadline,
+    ));
+
+    let res = s.client.try_create_escrows_batch(&buyer, &configs);
+    assert!(res.is_err());
+    assert_eq!(s.client.get_escrow_counter(), 0);
+    assert_eq!(s.token_client.balance(&buyer), 20_000);
+    assert!(s.client.try_get_escrow(&0).is_err());
+}
+
+#[test]
+fn test_create_escrows_batch_single_item() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let mut configs: Vec<EscrowBatchConfig> = Vec::new(&s.env);
+    let deadline = s.env.ledger().timestamp() + 1000;
+    configs.push_back(make_batch_config(
+        &s.env,
+        Address::generate(&s.env),
+        Address::generate(&s.env),
+        250,
+        s.token_addr.clone(),
+        deadline,
+    ));
+
+    let ids = s.client.create_escrows_batch(&buyer, &configs);
+    assert_eq!(ids.len(), 1);
+    assert_eq!(ids.get(0).unwrap(), 0);
+
+    let events = s.env.events().all();
+    let batch_topic = (Symbol::new(&s.env, "batch_escrow_created"),).into_val(&s.env);
+    let summary = events
+        .iter()
+        .find(|e| e.1 == batch_topic)
+        .expect("Expected batch summary event");
+    let summary_data: soroban_sdk::Map<Symbol, soroban_sdk::Val> = summary.2.into_val(&s.env);
+
+    let count: u32 = summary_data
+        .get(Symbol::new(&s.env, "count"))
+        .unwrap()
+        .into_val(&s.env);
+    let first_id: u32 = summary_data
+        .get(Symbol::new(&s.env, "first_id"))
+        .unwrap()
+        .into_val(&s.env);
+    let last_id: u32 = summary_data
+        .get(Symbol::new(&s.env, "last_id"))
+        .unwrap()
+        .into_val(&s.env);
+
+    assert_eq!(count, 1);
+    assert_eq!(first_id, 0);
+    assert_eq!(last_id, 0);
+}
+

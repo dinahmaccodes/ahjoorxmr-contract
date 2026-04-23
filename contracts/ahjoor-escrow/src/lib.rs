@@ -10,6 +10,7 @@ const PERSISTENT_BUMP_AMOUNT: u32 = 120_000;
 const DEADLINE_EXTENSION_PROPOSAL_WINDOW: u64 = 24 * 60 * 60;
 const MAX_EVIDENCE_ENTRIES_PER_PARTY: u32 = 5;
 const DEFAULT_DISPUTE_TIMEOUT_SECONDS: u64 = 7 * 24 * 60 * 60;
+const MAX_BATCH_ESCROWS: u32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -87,6 +88,20 @@ pub struct EscrowTemplate {
     pub active: bool,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowBatchConfig {
+    pub seller: Address,
+    pub arbiter: Address,
+    pub amount: i128,
+    pub token: Address,
+    pub deadline: u64,
+    pub metadata_hash: Option<BytesN<32>>,
+    pub sellers: Vec<(Address, u32)>,
+    pub auto_renew: bool,
+    pub renewal_count: u32,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
@@ -159,6 +174,88 @@ impl AhjoorEscrowContract {
         Self::require_not_paused(&env);
         buyer.require_auth();
 
+        Self::create_escrow_core(
+            &env,
+            &buyer,
+            seller,
+            arbiter,
+            amount,
+            token,
+            deadline,
+            metadata_hash,
+            sellers,
+            auto_renew,
+            renewal_count,
+        )
+    }
+
+    /// Create up to 10 escrows in one atomic transaction.
+    /// Returns the list of contiguous escrow IDs created.
+    pub fn create_escrows_batch(
+        env: Env,
+        buyer: Address,
+        escrow_configs: Vec<EscrowBatchConfig>,
+    ) -> Vec<u32> {
+        Self::require_not_paused(&env);
+        buyer.require_auth();
+
+        if escrow_configs.is_empty() {
+            panic!("Batch must contain at least one escrow config");
+        }
+        if escrow_configs.len() > MAX_BATCH_ESCROWS {
+            panic!("Batch size exceeds maximum of 10 escrows");
+        }
+
+        let mut created_ids: Vec<u32> = Vec::new(&env);
+        let mut first_id: Option<u32> = None;
+        let mut last_id: u32 = 0;
+
+        for i in 0..escrow_configs.len() {
+            let cfg = escrow_configs.get(i).unwrap();
+            let escrow_id = Self::create_escrow_core(
+                &env,
+                &buyer,
+                cfg.seller,
+                cfg.arbiter,
+                cfg.amount,
+                cfg.token,
+                cfg.deadline,
+                cfg.metadata_hash,
+                cfg.sellers,
+                cfg.auto_renew,
+                cfg.renewal_count,
+            );
+
+            if first_id.is_none() {
+                first_id = Some(escrow_id);
+            }
+            last_id = escrow_id;
+            created_ids.push_back(escrow_id);
+        }
+
+        events::emit_batch_escrow_created(
+            &env,
+            escrow_configs.len(),
+            first_id.expect("Batch contained no escrows"),
+            last_id,
+        );
+
+        created_ids
+    }
+
+    fn create_escrow_core(
+        env: &Env,
+        buyer: &Address,
+        seller: Address,
+        arbiter: Address,
+        amount: i128,
+        token: Address,
+        deadline: u64,
+        metadata_hash: Option<BytesN<32>>,
+        sellers: Vec<(Address, u32)>,
+        auto_renew: bool,
+        renewal_count: u32,
+    ) -> u32 {
         if amount <= 0 {
             panic!("Escrow amount must be positive");
         }
@@ -179,7 +276,7 @@ impl AhjoorEscrowContract {
         // Validate multi-party sellers if provided
         let resolved_sellers: Vec<(Address, u32)> = if sellers.is_empty() {
             // Single-seller mode: wrap seller with 10000 bps
-            let mut v = Vec::new(&env);
+            let mut v = Vec::new(env);
             v.push_back((seller.clone(), 10_000u32));
             v
         } else {
@@ -194,20 +291,20 @@ impl AhjoorEscrowContract {
             if total_bps != 10_000 {
                 panic!("Seller allocations must sum to 10000 bps");
             }
-            sellers.clone()
+            sellers
         };
 
         // Transfer tokens from buyer to contract (escrow)
-        let client = token::Client::new(&env, &token);
-        client.transfer(&buyer, &env.current_contract_address(), &amount);
+        let client = token::Client::new(env, &token);
+        client.transfer(buyer, &env.current_contract_address(), &amount);
 
-        let escrow_id = Self::next_escrow_id(&env);
+        let escrow_id = Self::next_escrow_id(env);
 
         // Primary seller is the first in the list (or the passed seller for single-party)
-        let primary_seller = if sellers.is_empty() {
-            seller.clone()
+        let primary_seller = if resolved_sellers.len() == 1 {
+            resolved_sellers.get(0).unwrap().0
         } else {
-            resolved_sellers.get(0).unwrap().0.clone()
+            resolved_sellers.get(0).unwrap().0
         };
 
         let escrow = Escrow {
@@ -255,12 +352,19 @@ impl AhjoorEscrowContract {
         }
 
         events::emit_escrow_created(
-            &env, escrow_id, buyer.clone(), primary_seller, arbiter, amount, token, deadline,
+            env,
+            escrow_id,
+            buyer.clone(),
+            primary_seller,
+            arbiter,
+            amount,
+            token,
+            deadline,
         );
 
         // Emit multi-party event if more than one seller
         if resolved_sellers.len() > 1 {
-            events::emit_multi_party_escrow_created(&env, escrow_id, resolved_sellers.len());
+            events::emit_multi_party_escrow_created(env, escrow_id, resolved_sellers.len());
         }
 
         env.storage()
@@ -1398,7 +1502,7 @@ impl AhjoorEscrowContract {
     /// Active escrows with this arbiter are flagged via ArbiterNeedsReplacement.
     pub fn remove_arbiter(env: Env, admin: Address, arbiter: Address, escrow_ids: Vec<u32>) {
         Self::require_admin(&env, &admin);
-        let mut pool: Vec<Address> = env
+        let pool: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::ArbiterPool)
