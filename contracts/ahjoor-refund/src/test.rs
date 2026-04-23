@@ -6,7 +6,7 @@ use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    Address, BytesN, Env, Map, String,
+    Address, BytesN, Env, String,
 };
 
 const UPGRADE_WASM: &[u8] = include_bytes!("../../../fixtures/upgrade_contract.wasm");
@@ -52,7 +52,7 @@ fn setup<'a>() -> TestSetup<'a> {
 
     // Initialize both contracts — 86400 s (1 day) dispute window
     payment_client.initialize(&admin);
-    refund_client.initialize(&admin, &payment_id, &86_400u64);
+    refund_client.initialize(&admin, &payment_id, &86_400u64, &None, &0u32, &None);
 
     TestSetup {
         env,
@@ -100,7 +100,7 @@ fn test_initialize() {
 fn test_initialize_twice_panics() {
     let s = setup();
     s.refund_client
-        .initialize(&s.admin, &s.payment_client.address, &86_400u64);
+        .initialize(&s.admin, &s.payment_client.address, &86_400u64, &None, &0u32, &None);
 }
 
 // ===========================================================================
@@ -752,7 +752,7 @@ fn test_auth_required_for_admin_approve_refund() {
     let refund_id_addr = env.register(AhjoorRefundContract, ());
     let client = AhjoorRefundContractClient::new(&env, &refund_id_addr);
     let admin = Address::generate(&env);
-    client.initialize(&admin, &payment_id_addr, &86_400u64);
+    client.initialize(&admin, &payment_id_addr, &86_400u64, &None, &0u32, &None);
 
     let res = client.try_approve_refund(&admin, &0);
     assert!(res.is_err());
@@ -1098,7 +1098,7 @@ fn setup_with_dispute_window<'a>(dispute_window: u64) -> TestSetup<'a> {
     let token_admin_client = TokenAdminClient::new(&env, &token_addr);
 
     payment_client.initialize(&admin);
-    refund_client.initialize(&admin, &payment_id, &dispute_window);
+    refund_client.initialize(&admin, &payment_id, &dispute_window, &None, &0u32, &None);
 
     TestSetup {
         env,
