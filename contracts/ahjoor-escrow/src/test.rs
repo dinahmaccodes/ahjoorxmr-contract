@@ -67,7 +67,7 @@ fn test_create_escrow() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     assert_eq!(escrow_id, 0);
     assert_eq!(s.token_client.balance(&buyer), 750);
@@ -93,7 +93,7 @@ fn test_create_escrow_zero_amount_panics() {
 
     let deadline = s.env.ledger().timestamp() + 1000;
     s.client
-        .create_escrow(&buyer, &seller, &arbiter, &0, &s.token_addr, &deadline);
+        .create_escrow(&buyer, &seller, &arbiter, &0, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn test_create_escrow_past_deadline_panics() {
 
     let deadline = s.env.ledger().timestamp();
     s.client
-        .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+        .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 }
 
 // ===========================================================================
@@ -127,7 +127,7 @@ fn test_release_escrow_by_buyer() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.release_escrow(&buyer, &escrow_id);
 
@@ -149,7 +149,7 @@ fn test_release_escrow_by_arbiter() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.release_escrow(&arbiter, &escrow_id);
 
@@ -170,7 +170,7 @@ fn test_partial_release_by_buyer() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.partial_release(&buyer, &escrow_id, &150);
 
@@ -193,7 +193,7 @@ fn test_double_partial_release_then_full_release_remaining() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.partial_release(&buyer, &escrow_id, &100);
     s.client.partial_release(&arbiter, &escrow_id, &75);
@@ -225,7 +225,7 @@ fn test_partial_release_over_release_attempt_rejected() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     let result = s.client.try_partial_release(&buyer, &escrow_id, &251);
     assert!(result.is_err());
@@ -250,7 +250,7 @@ fn test_release_escrow_by_seller_panics() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.release_escrow(&seller, &escrow_id);
 }
@@ -268,7 +268,7 @@ fn test_release_escrow_already_released_panics() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.release_escrow(&buyer, &escrow_id);
     s.client.release_escrow(&buyer, &escrow_id); // Should panic
@@ -290,7 +290,7 @@ fn test_dispute_escrow_by_buyer() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &buyer,
@@ -318,7 +318,7 @@ fn test_dispute_escrow_by_seller() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &seller,
@@ -344,7 +344,7 @@ fn test_dispute_escrow_by_arbiter_panics() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &arbiter,
@@ -369,7 +369,7 @@ fn test_partial_dispute_50_50_split() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     // Dispute only 100 (50%), undisputed 100 released to seller immediately
     s.client.dispute_escrow(
@@ -406,7 +406,7 @@ fn test_partial_dispute_80_20_split() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     // Dispute only 20 (20%), undisputed 80 released to seller immediately
     s.client.dispute_escrow(
@@ -439,7 +439,7 @@ fn test_full_dispute_still_works() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     // Full dispute: dispute_amount == escrow amount
     s.client.dispute_escrow(
@@ -467,7 +467,7 @@ fn test_partial_dispute_amount_exceeds_escrow_rejected() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     let result = s.client.try_dispute_escrow(
         &buyer,
@@ -492,7 +492,7 @@ fn test_partial_dispute_emits_partial_dispute_raised_event() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &buyer,
@@ -535,7 +535,7 @@ fn test_resolve_dispute_to_seller() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &buyer,
@@ -566,7 +566,7 @@ fn test_resolve_dispute_to_buyer() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &seller,
@@ -595,7 +595,7 @@ fn test_resolve_dispute_by_buyer_panics() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &buyer,
@@ -785,7 +785,7 @@ fn test_auto_release_expired() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     // Advance time past deadline
     s.env.ledger().set_timestamp(deadline + 1);
@@ -811,7 +811,7 @@ fn test_auto_release_not_expired_panics() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.auto_release_expired(&escrow_id);
 }
@@ -829,7 +829,7 @@ fn test_auto_release_disputed_panics() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &buyer,
@@ -859,7 +859,7 @@ fn test_escrow_created_emits_event() {
 
     let deadline = s.env.ledger().timestamp() + 1000;
     s.client
-        .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+        .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     let events = s.env.events().all();
     assert!(events.len() > 0);
@@ -877,7 +877,7 @@ fn test_escrow_released_emits_event() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.release_escrow(&buyer, &escrow_id);
 
@@ -897,7 +897,7 @@ fn test_partial_release_emits_event() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.partial_release(&buyer, &escrow_id, &150);
 
@@ -942,9 +942,9 @@ fn test_escrow_counter_increments() {
     let deadline = s.env.ledger().timestamp() + 1000;
 
     s.client
-        .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+        .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
     s.client
-        .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+        .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     assert_eq!(s.client.get_escrow_counter(), 2);
 }
@@ -1031,6 +1031,8 @@ fn test_deadline_extension_two_party_flow() {
         &i128::MAX,
         &s.token_addr,
         &deadline,
+        &None,
+        &Vec::new(&s.env),
     );
     assert!(result.is_err());
 }
@@ -1071,6 +1073,8 @@ fn test_deadline_extension_buyer_proposes_seller_accepts() {
         &250,
         &s.token_addr,
         &initial_deadline,
+        &None,
+        &Vec::new(&s.env),
     );
 
     let extended_deadline = initial_deadline + 3600;
@@ -1099,6 +1103,8 @@ fn test_deadline_extension_seller_can_propose_buyer_accepts() {
         &250,
         &s.token_addr,
         &initial_deadline,
+        &None,
+        &Vec::new(&s.env),
     );
 
     let extended_deadline = initial_deadline + 7200;
@@ -1163,7 +1169,7 @@ fn test_write_functions_blocked_when_paused_reads_still_work() {
     let deadline = s.env.ledger().timestamp() + 500;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client.dispute_escrow(
         &buyer,
@@ -1198,6 +1204,8 @@ fn test_fuzz_like_create_inputs_100_cases() {
             &amount,
             &s.token_addr,
             &deadline,
+        &None,
+        &Vec::new(&s.env),
         );
     }
 
@@ -1236,6 +1244,8 @@ fn test_deadline_extension_cannot_be_same_as_current() {
         &250,
         &s.token_addr,
         &initial_deadline,
+        &None,
+        &Vec::new(&s.env),
     );
 
     let result = s
@@ -1264,6 +1274,8 @@ fn test_deadline_extension_same_party_accept_rejected() {
         &250,
         &s.token_addr,
         &initial_deadline,
+        &None,
+        &Vec::new(&s.env),
     );
 
     let extended_deadline = initial_deadline + 1800;
@@ -1291,6 +1303,8 @@ fn test_deadline_extension_proposal_expiry_rejected() {
         &250,
         &s.token_addr,
         &initial_deadline,
+        &None,
+        &Vec::new(&s.env),
     );
 
     let extended_deadline = initial_deadline + 1800;
@@ -1325,6 +1339,8 @@ fn test_dispute_blocks_deadline_extension() {
         &250,
         &s.token_addr,
         &initial_deadline,
+        &None,
+        &Vec::new(&s.env),
     );
 
     s.client.dispute_escrow(
@@ -1352,14 +1368,14 @@ fn test_recovery_after_resume() {
     let deadline = s.env.ledger().timestamp() + 1000;
     let escrow_id =
         s.client
-            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+            .create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
 
     s.client
         .pause_contract(&s.admin, &String::from_str(&s.env, "Emergency"));
 
     let create_res =
         s.client
-            .try_create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline);
+            .try_create_escrow(&buyer, &seller, &arbiter, &100, &s.token_addr, &deadline, &None, &Vec::new(&s.env));
     assert!(create_res.is_err());
 
     let release_res = s.client.try_release_escrow(&buyer, &escrow_id);
@@ -1392,7 +1408,7 @@ fn test_admin_can_add_and_remove_allowed_token() {
 
     let res = s
         .client
-        .try_create_escrow(&buyer, &seller, &arbiter, &100, &new_token, &deadline);
+        .try_create_escrow(&buyer, &seller, &arbiter, &100, &new_token, &deadline, &None, &Vec::new(&s.env));
     assert!(res.is_err());
 }
 
@@ -1422,5 +1438,363 @@ fn test_create_escrow_with_disallowed_token_panics_token_not_allowed() {
 
     let deadline = s.env.ledger().timestamp() + 1000;
     s.client
-        .create_escrow(&buyer, &seller, &arbiter, &250, &unallowed_token, &deadline);
+        .create_escrow(&buyer, &seller, &arbiter, &250, &unallowed_token, &deadline, &None, &Vec::new(&s.env));
+}
+
+// ===========================================================================
+//  Issue #145: Escrow Metadata Tests
+// ===========================================================================
+
+#[test]
+fn test_create_escrow_with_metadata_hash() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let hash = BytesN::from_array(&s.env, &[1u8; 32]);
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+        &Some(hash.clone()),
+        &Vec::new(&s.env),
+    );
+
+    let stored = s.client.get_metadata_hash(&escrow_id);
+    assert_eq!(stored, Some(hash));
+}
+
+#[test]
+fn test_create_escrow_without_metadata_hash() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let stored = s.client.get_metadata_hash(&escrow_id);
+    assert_eq!(stored, None);
+}
+
+#[test]
+fn test_update_metadata_by_buyer() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let new_hash = BytesN::from_array(&s.env, &[2u8; 32]);
+    s.client.update_metadata(&buyer, &escrow_id, &new_hash);
+
+    let stored = s.client.get_metadata_hash(&escrow_id);
+    assert_eq!(stored, Some(new_hash));
+}
+
+#[test]
+fn test_update_metadata_by_seller() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let new_hash = BytesN::from_array(&s.env, &[3u8; 32]);
+    s.client.update_metadata(&seller, &escrow_id, &new_hash);
+
+    let stored = s.client.get_metadata_hash(&escrow_id);
+    assert_eq!(stored, Some(new_hash));
+}
+
+#[test]
+fn test_update_metadata_multiple_times_only_latest_stored() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let hash1 = BytesN::from_array(&s.env, &[4u8; 32]);
+    let hash2 = BytesN::from_array(&s.env, &[5u8; 32]);
+    s.client.update_metadata(&buyer, &escrow_id, &hash1);
+    s.client.update_metadata(&seller, &escrow_id, &hash2);
+
+    let stored = s.client.get_metadata_hash(&escrow_id);
+    assert_eq!(stored, Some(hash2));
+}
+
+#[test]
+#[should_panic(expected = "Only buyer or seller can update metadata")]
+fn test_update_metadata_unauthorized_panics() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let outsider = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller,
+        &arbiter,
+        &250,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &Vec::new(&s.env),
+    );
+
+    let hash = BytesN::from_array(&s.env, &[6u8; 32]);
+    s.client.update_metadata(&outsider, &escrow_id, &hash);
+}
+
+// ===========================================================================
+//  Issue #148: Multi-Party Escrow Tests
+// ===========================================================================
+
+#[test]
+fn test_create_multi_party_escrow_two_sellers() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller1 = Address::generate(&s.env);
+    let seller2 = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let mut sellers: Vec<(Address, u32)> = Vec::new(&s.env);
+    sellers.push_back((seller1.clone(), 6000u32));
+    sellers.push_back((seller2.clone(), 4000u32));
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller1,
+        &arbiter,
+        &1000,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &sellers,
+    );
+
+    let escrow = s.client.get_escrow(&escrow_id);
+    assert_eq!(escrow.amount, 1000);
+    assert_eq!(escrow.sellers.len(), 2);
+}
+
+#[test]
+fn test_release_multi_party_escrow_two_sellers_proportional() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller1 = Address::generate(&s.env);
+    let seller2 = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let mut sellers: Vec<(Address, u32)> = Vec::new(&s.env);
+    sellers.push_back((seller1.clone(), 6000u32));
+    sellers.push_back((seller2.clone(), 4000u32));
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller1,
+        &arbiter,
+        &1000,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &sellers,
+    );
+
+    s.client.release_escrow(&buyer, &escrow_id);
+
+    // seller1 gets 60% = 600, seller2 gets 40% = 400
+    assert_eq!(s.token_client.balance(&seller1), 600);
+    assert_eq!(s.token_client.balance(&seller2), 400);
+}
+
+#[test]
+fn test_release_multi_party_escrow_five_sellers() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let s1 = Address::generate(&s.env);
+    let s2 = Address::generate(&s.env);
+    let s3 = Address::generate(&s.env);
+    let s4 = Address::generate(&s.env);
+    let s5 = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &10000);
+
+    let mut sellers: Vec<(Address, u32)> = Vec::new(&s.env);
+    sellers.push_back((s1.clone(), 2000u32));
+    sellers.push_back((s2.clone(), 2000u32));
+    sellers.push_back((s3.clone(), 2000u32));
+    sellers.push_back((s4.clone(), 2000u32));
+    sellers.push_back((s5.clone(), 2000u32));
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &s1,
+        &arbiter,
+        &10000,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &sellers,
+    );
+
+    s.client.release_escrow(&buyer, &escrow_id);
+
+    assert_eq!(s.token_client.balance(&s1), 2000);
+    assert_eq!(s.token_client.balance(&s2), 2000);
+    assert_eq!(s.token_client.balance(&s3), 2000);
+    assert_eq!(s.token_client.balance(&s4), 2000);
+    assert_eq!(s.token_client.balance(&s5), 2000);
+}
+
+#[test]
+fn test_release_multi_party_dust_goes_to_first_seller() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller1 = Address::generate(&s.env);
+    let seller2 = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1001);
+
+    let mut sellers: Vec<(Address, u32)> = Vec::new(&s.env);
+    sellers.push_back((seller1.clone(), 5000u32));
+    sellers.push_back((seller2.clone(), 5000u32));
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id = s.client.create_escrow(
+        &buyer,
+        &seller1,
+        &arbiter,
+        &1001,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &sellers,
+    );
+
+    s.client.release_escrow(&buyer, &escrow_id);
+
+    // seller2 gets floor(1001 * 5000 / 10000) = 500
+    // seller1 gets remainder = 1001 - 500 = 501
+    assert_eq!(s.token_client.balance(&seller2), 500);
+    assert_eq!(s.token_client.balance(&seller1), 501);
+}
+
+#[test]
+#[should_panic(expected = "Seller allocations must sum to 10000 bps")]
+fn test_create_multi_party_escrow_invalid_bps_panics() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller1 = Address::generate(&s.env);
+    let seller2 = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    let mut sellers: Vec<(Address, u32)> = Vec::new(&s.env);
+    sellers.push_back((seller1.clone(), 5000u32));
+    sellers.push_back((seller2.clone(), 3000u32)); // only 8000 bps total
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    s.client.create_escrow(
+        &buyer,
+        &seller1,
+        &arbiter,
+        &1000,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &sellers,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Maximum 5 sellers allowed")]
+fn test_create_multi_party_escrow_too_many_sellers_panics() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    // 6 sellers each with 1666 bps + 1 extra to reach 10000 — but 6 > 5 limit
+    let mut sellers: Vec<(Address, u32)> = Vec::new(&s.env);
+    sellers.push_back((Address::generate(&s.env), 2000u32));
+    sellers.push_back((Address::generate(&s.env), 2000u32));
+    sellers.push_back((Address::generate(&s.env), 2000u32));
+    sellers.push_back((Address::generate(&s.env), 2000u32));
+    sellers.push_back((Address::generate(&s.env), 1000u32));
+    sellers.push_back((Address::generate(&s.env), 1000u32)); // 6th seller
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    s.client.create_escrow(
+        &buyer,
+        &Address::generate(&s.env),
+        &arbiter,
+        &1000,
+        &s.token_addr,
+        &deadline,
+        &None,
+        &sellers,
+    );
 }

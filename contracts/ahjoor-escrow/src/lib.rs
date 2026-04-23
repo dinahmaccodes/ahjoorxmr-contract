@@ -33,6 +33,8 @@ pub struct Escrow {
     pub status: EscrowStatus,
     pub created_at: u64,
     pub deadline: u64,
+    pub metadata_hash: Option<BytesN<32>>,
+    pub sellers: Vec<(Address, u32)>, // (address, bps) — multi-party sellers
 }
 
 #[contracttype]
@@ -90,6 +92,7 @@ pub enum DataKey {
     ArbiterPool,
     NextArbiterIndex,
     ArbiterNeedsReplacement(u32),
+    EscrowMetadata(u32),
 }
 
 const MAX_PROTOCOL_FEE_BPS: u32 = 200; // 2%
@@ -127,6 +130,8 @@ impl AhjoorEscrowContract {
         amount: i128,
         token: Address,
         deadline: u64,
+        metadata_hash: Option<BytesN<32>>,
+        sellers: Vec<(Address, u32)>,
     ) -> u32 {
         Self::require_not_paused(&env);
         buyer.require_auth();
@@ -148,21 +153,52 @@ impl AhjoorEscrowContract {
             panic!("TokenNotAllowed");
         }
 
+        // Validate multi-party sellers if provided
+        let resolved_sellers: Vec<(Address, u32)> = if sellers.is_empty() {
+            // Single-seller mode: wrap seller with 10000 bps
+            let mut v = Vec::new(&env);
+            v.push_back((seller.clone(), 10_000u32));
+            v
+        } else {
+            if sellers.len() > 5 {
+                panic!("Maximum 5 sellers allowed");
+            }
+            let mut total_bps: u32 = 0;
+            for i in 0..sellers.len() {
+                let (_, bps) = sellers.get(i).unwrap();
+                total_bps += bps;
+            }
+            if total_bps != 10_000 {
+                panic!("Seller allocations must sum to 10000 bps");
+            }
+            sellers.clone()
+        };
+
         // Transfer tokens from buyer to contract (escrow)
         let client = token::Client::new(&env, &token);
         client.transfer(&buyer, &env.current_contract_address(), &amount);
 
         let escrow_id = Self::next_escrow_id(&env);
+
+        // Primary seller is the first in the list (or the passed seller for single-party)
+        let primary_seller = if sellers.is_empty() {
+            seller.clone()
+        } else {
+            resolved_sellers.get(0).unwrap().0.clone()
+        };
+
         let escrow = Escrow {
             id: escrow_id,
             buyer: buyer.clone(),
-            seller: seller.clone(),
+            seller: primary_seller.clone(),
             arbiter: arbiter.clone(),
             amount,
             token: token.clone(),
             status: EscrowStatus::Active,
             created_at: env.ledger().timestamp(),
             deadline,
+            metadata_hash: metadata_hash.clone(),
+            sellers: resolved_sellers.clone(),
         };
 
         env.storage()
@@ -174,9 +210,27 @@ impl AhjoorEscrowContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
+        // Store metadata separately with timestamp if provided
+        if let Some(ref hash) = metadata_hash {
+            env.storage().persistent().set(
+                &DataKey::EscrowMetadata(escrow_id),
+                &(hash.clone(), env.ledger().timestamp()),
+            );
+            env.storage().persistent().extend_ttl(
+                &DataKey::EscrowMetadata(escrow_id),
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
         events::emit_escrow_created(
-            &env, escrow_id, buyer, seller, arbiter, amount, token, deadline,
+            &env, escrow_id, buyer.clone(), primary_seller, arbiter, amount, token, deadline,
         );
+
+        // Emit multi-party event if more than one seller
+        if resolved_sellers.len() > 1 {
+            events::emit_multi_party_escrow_created(&env, escrow_id, resolved_sellers.len());
+        }
 
         env.storage()
             .instance()
@@ -205,11 +259,35 @@ impl AhjoorEscrowContract {
         }
 
         let client = token::Client::new(&env, &escrow.token);
-        client.transfer(
-            &env.current_contract_address(),
-            &escrow.seller,
-            &escrow.amount,
-        );
+        let total = escrow.amount;
+
+        if escrow.sellers.len() <= 1 {
+            // Single-seller path
+            client.transfer(
+                &env.current_contract_address(),
+                &escrow.seller,
+                &total,
+            );
+            events::emit_escrow_released(&env, escrow_id, escrow.seller.clone(), total);
+        } else {
+            // Multi-party: distribute proportionally, dust goes to first seller
+            let mut distributed: i128 = 0;
+            for i in 1..escrow.sellers.len() {
+                let (addr, bps) = escrow.sellers.get(i).unwrap();
+                let share = (total * bps as i128) / 10_000;
+                if share > 0 {
+                    client.transfer(&env.current_contract_address(), &addr, &share);
+                }
+                distributed += share;
+            }
+            // First seller gets remainder (handles rounding dust)
+            let first_share = total - distributed;
+            if first_share > 0 {
+                let (first_addr, _) = escrow.sellers.get(0).unwrap();
+                client.transfer(&env.current_contract_address(), &first_addr, &first_share);
+            }
+            events::emit_multi_party_escrow_released(&env, escrow_id, total);
+        }
 
         escrow.status = EscrowStatus::Released;
 
@@ -221,8 +299,6 @@ impl AhjoorEscrowContract {
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
-
-        events::emit_escrow_released(&env, escrow_id, escrow.seller, escrow.amount);
 
         env.storage()
             .instance()
@@ -667,6 +743,62 @@ impl AhjoorEscrowContract {
             .expect("Escrow not found")
     }
 
+    /// Update metadata hash for an escrow. Requires auth from buyer or seller.
+    pub fn update_metadata(
+        env: Env,
+        caller: Address,
+        escrow_id: u32,
+        new_hash: BytesN<32>,
+    ) {
+        caller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if caller != escrow.buyer && caller != escrow.seller {
+            panic!("Only buyer or seller can update metadata");
+        }
+
+        escrow.metadata_hash = Some(new_hash.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+
+        env.storage().persistent().set(
+            &DataKey::EscrowMetadata(escrow_id),
+            &(new_hash.clone(), env.ledger().timestamp()),
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::EscrowMetadata(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_escrow_metadata_updated(&env, escrow_id, new_hash, caller);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the latest metadata hash for an escrow.
+    pub fn get_metadata_hash(env: Env, escrow_id: u32) -> Option<BytesN<32>> {
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+        escrow.metadata_hash
+    }
+
     /// Get dispute details
     pub fn get_dispute(env: Env, escrow_id: u32) -> Dispute {
         env.storage()
@@ -874,6 +1006,72 @@ impl AhjoorEscrowContract {
         seller: Address,
         template_id: u32,
         amount: i128,
+    ) -> u32 {
+        Self::require_not_paused(&env);
+        buyer.require_auth();
+
+        let template: EscrowTemplate = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Template(template_id))
+            .expect("Template not found");
+
+        if !template.active {
+            panic!("Template is deactivated");
+        }
+        if amount <= 0 {
+            panic!("Escrow amount must be positive");
+        }
+
+        let deadline = env.ledger().timestamp() + template.config.deadline_duration;
+
+        let client = token::Client::new(&env, &template.config.token);
+        client.transfer(&buyer, &env.current_contract_address(), &amount);
+
+        let escrow_id = Self::next_escrow_id(&env);
+        let mut single_seller = Vec::new(&env);
+        single_seller.push_back((seller.clone(), 10_000u32));
+        let escrow = Escrow {
+            id: escrow_id,
+            buyer: buyer.clone(),
+            seller: seller.clone(),
+            arbiter: template.config.arbiter.clone(),
+            amount,
+            token: template.config.token.clone(),
+            status: EscrowStatus::Active,
+            created_at: env.ledger().timestamp(),
+            deadline,
+            metadata_hash: None,
+            sellers: single_seller,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_escrow_created(
+            &env,
+            escrow_id,
+            buyer,
+            seller,
+            template.config.arbiter,
+            amount,
+            template.config.token,
+            deadline,
+        );
+        events::emit_escrow_created_from_template(&env, escrow_id, template_id);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        escrow_id
+    }
     /// Add an arbiter to the pool. Admin only.
     pub fn add_arbiter(env: Env, admin: Address, arbiter: Address) {
         Self::require_admin(&env, &admin);
@@ -966,22 +1164,21 @@ impl AhjoorEscrowContract {
         Self::require_not_paused(&env);
         buyer.require_auth();
 
-        let template: EscrowTemplate = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Template(template_id))
-            .expect("Template not found");
-
-        if !template.active {
-            panic!("Template is deactivated");
-        }
         if amount <= 0 {
             panic!("Escrow amount must be positive");
         }
+        if deadline <= env.ledger().timestamp() {
+            panic!("Deadline must be in the future");
+        }
+        let is_allowed = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        if !is_allowed {
+            panic!("TokenNotAllowed");
+        }
 
-        let deadline = env.ledger().timestamp() + template.config.deadline_duration;
-
-        let client = token::Client::new(&env, &template.config.token);
         let pool: Vec<Address> = env
             .storage()
             .instance()
@@ -1002,38 +1199,24 @@ impl AhjoorEscrowContract {
             .instance()
             .set(&DataKey::NextArbiterIndex, &next_idx);
 
-        if amount <= 0 {
-            panic!("Escrow amount must be positive");
-        }
-        if deadline <= env.ledger().timestamp() {
-            panic!("Deadline must be in the future");
-        }
-        let is_allowed = env
-            .storage()
-            .instance()
-            .get(&DataKey::AllowedToken(token.clone()))
-            .unwrap_or(false);
-        if !is_allowed {
-            panic!("TokenNotAllowed");
-        }
-
         let client = token::Client::new(&env, &token);
         client.transfer(&buyer, &env.current_contract_address(), &amount);
 
         let escrow_id = Self::next_escrow_id(&env);
+        let mut single_seller = Vec::new(&env);
+        single_seller.push_back((seller.clone(), 10_000u32));
         let escrow = Escrow {
             id: escrow_id,
             buyer: buyer.clone(),
             seller: seller.clone(),
-            arbiter: template.config.arbiter.clone(),
-            amount,
-            token: template.config.token.clone(),
             arbiter: arbiter.clone(),
             amount,
             token: token.clone(),
             status: EscrowStatus::Active,
             created_at: env.ledger().timestamp(),
             deadline,
+            metadata_hash: None,
+            sellers: single_seller,
         };
 
         env.storage()
@@ -1046,16 +1229,6 @@ impl AhjoorEscrowContract {
         );
 
         events::emit_escrow_created(
-            &env,
-            escrow_id,
-            buyer,
-            seller,
-            template.config.arbiter,
-            amount,
-            template.config.token,
-            deadline,
-        );
-        events::emit_escrow_created_from_template(&env, escrow_id, template_id);
             &env, escrow_id, buyer, seller, arbiter.clone(), amount, token, deadline,
         );
         events::emit_arbiter_assigned(&env, escrow_id, arbiter);
