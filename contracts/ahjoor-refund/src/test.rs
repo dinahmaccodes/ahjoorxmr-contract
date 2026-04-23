@@ -172,7 +172,7 @@ fn test_request_refund_nonexistent_payment_panics() {
 }
 
 #[test]
-#[should_panic(expected = "PaymentAmountMismatch: refund amount exceeds remaining payment amount")]
+#[should_panic(expected = "ExceedsRefundableAmount")]
 fn test_request_refund_exceeds_payment_amount_panics() {
     let s = setup();
     let customer = Address::generate(&s.env);
@@ -1048,6 +1048,153 @@ fn test_different_customers_indexes_are_isolated() {
             .len(),
         1
     );
+}
+
+// ===========================================================================
+//  Per-Payment Refund Cap Tracking Tests (#165)
+// ===========================================================================
+
+#[test]
+fn test_get_refundable_remaining_full_before_any_refund() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    let pid = create_completed_payment(&s, &customer, &merchant, 300);
+    assert_eq!(s.refund_client.get_refundable_remaining(&pid), 300);
+}
+
+#[test]
+fn test_get_refundable_remaining_decreases_after_processed_refund() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    let pid = create_completed_payment(&s, &customer, &merchant, 300);
+    s.token_admin_client.mint(&customer, &100);
+    let rid = s
+        .refund_client
+        .request_refund(&customer, &pid, &100, &String::from_str(&s.env, "r1"));
+    s.refund_client.approve_refund(&s.admin, &rid);
+    s.refund_client.process_refund(&s.admin, &rid);
+
+    assert_eq!(s.refund_client.get_refundable_remaining(&pid), 200);
+}
+
+#[test]
+fn test_three_partial_refunds_exhaust_payment() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    // Payment of 300; three refunds of 100 each
+    let pid = create_completed_payment(&s, &customer, &merchant, 300);
+
+    for i in 0..3u32 {
+        s.token_admin_client.mint(&customer, &100);
+        let reason = if i == 0 {
+            String::from_str(&s.env, "first")
+        } else if i == 1 {
+            String::from_str(&s.env, "second")
+        } else {
+            String::from_str(&s.env, "third")
+        };
+        let rid = s
+            .refund_client
+            .request_refund(&customer, &pid, &100, &reason);
+        s.refund_client.approve_refund(&s.admin, &rid);
+        s.refund_client.process_refund(&s.admin, &rid);
+    }
+
+    assert_eq!(s.refund_client.get_refundable_remaining(&pid), 0);
+}
+
+#[test]
+fn test_cumulative_over_refund_rejected() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    // Payment of 200; refund 150, then try to refund 100 more (total 250 > 200)
+    let pid = create_completed_payment(&s, &customer, &merchant, 200);
+
+    s.token_admin_client.mint(&customer, &150);
+    let rid = s
+        .refund_client
+        .request_refund(&customer, &pid, &150, &String::from_str(&s.env, "partial"));
+    s.refund_client.approve_refund(&s.admin, &rid);
+    s.refund_client.process_refund(&s.admin, &rid);
+
+    // 50 remaining — requesting 100 should fail
+    s.token_admin_client.mint(&customer, &100);
+    let result = s.refund_client.try_request_refund(
+        &customer,
+        &pid,
+        &100,
+        &String::from_str(&s.env, "over-refund"),
+    );
+    assert!(result.is_err());
+    assert_eq!(s.refund_client.get_refundable_remaining(&pid), 50);
+}
+
+#[test]
+fn test_multiple_partial_refunds_accumulate_correctly() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    let pid = create_completed_payment(&s, &customer, &merchant, 500);
+
+    // Refund 100
+    s.token_admin_client.mint(&customer, &100);
+    let rid1 = s
+        .refund_client
+        .request_refund(&customer, &pid, &100, &String::from_str(&s.env, "r1"));
+    s.refund_client.approve_refund(&s.admin, &rid1);
+    s.refund_client.process_refund(&s.admin, &rid1);
+    assert_eq!(s.refund_client.get_refundable_remaining(&pid), 400);
+
+    // Refund 150
+    s.token_admin_client.mint(&customer, &150);
+    let rid2 = s
+        .refund_client
+        .request_refund(&customer, &pid, &150, &String::from_str(&s.env, "r2"));
+    s.refund_client.approve_refund(&s.admin, &rid2);
+    s.refund_client.process_refund(&s.admin, &rid2);
+    assert_eq!(s.refund_client.get_refundable_remaining(&pid), 250);
+
+    // Refund 250 (exactly remaining)
+    s.token_admin_client.mint(&customer, &250);
+    let rid3 = s
+        .refund_client
+        .request_refund(&customer, &pid, &250, &String::from_str(&s.env, "r3"));
+    s.refund_client.approve_refund(&s.admin, &rid3);
+    s.refund_client.process_refund(&s.admin, &rid3);
+    assert_eq!(s.refund_client.get_refundable_remaining(&pid), 0);
+}
+
+#[test]
+fn test_cap_event_emitted_when_remaining_near_zero() {
+    let s = setup();
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+
+    // Payment of 100; refund 95 (remaining = 5, which is <= 10% of 100)
+    let pid = create_completed_payment(&s, &customer, &merchant, 100);
+    s.token_admin_client.mint(&customer, &95);
+    let rid = s
+        .refund_client
+        .request_refund(&customer, &pid, &95, &String::from_str(&s.env, "near-cap"));
+    s.refund_client.approve_refund(&s.admin, &rid);
+    s.refund_client.process_refund(&s.admin, &rid);
+
+    use soroban_sdk::IntoVal;
+    let events = s.env.events().all();
+    let cap_event = events.iter().find(|e| {
+        e.1 == (soroban_sdk::Symbol::new(&s.env, "partial_refund_cap_applied"),)
+            .into_val(&s.env)
+    });
+    assert!(cap_event.is_some());
 }
 
 // ===========================================================================

@@ -105,6 +105,8 @@ pub enum DataKey {
     PaymentRefunds(u32),
     /// Dispute window in seconds; after this period a Requested refund can be auto-approved.
     DisputeWindow,
+    /// Cumulative refunded amount per payment_id (#165).
+    RefundedAmount(u32),
     /// Whitelist of auto-approved merchants (Issue #163)
     AutoApprovedMerchants,
     /// Escrow contract address for cross-contract refund registration (Issue #162)
@@ -241,9 +243,13 @@ impl AhjoorRefundContract {
         let merchant = payment.merchant.clone();
 
         // Validate refund amount does not exceed original payment amount
-        let remaining = payment.amount - payment.refunded_amount;
-        if amount > remaining {
-            panic!("PaymentAmountMismatch: refund amount exceeds remaining payment amount");
+        let already_refunded: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RefundedAmount(payment_id))
+            .unwrap_or(0);
+        if amount + already_refunded > payment.amount {
+            panic!("ExceedsRefundableAmount");
         }
 
         // Cache validated payment data — token comes from the payment record
@@ -471,6 +477,41 @@ impl AhjoorRefundContract {
                     &fee_amount,
                 );
                 events::emit_refund_fee_collected(&env, refund_id, fee_amount);
+            }
+        }
+
+        // Update cumulative refunded amount for this payment
+        let already_refunded: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RefundedAmount(refund.payment_id))
+            .unwrap_or(0);
+        let new_total = already_refunded + refund.amount;
+        env.storage()
+            .persistent()
+            .set(&DataKey::RefundedAmount(refund.payment_id), &new_total);
+        env.storage().persistent().extend_ttl(
+            &DataKey::RefundedAmount(refund.payment_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        // Emit cap event when remaining refundable is low (< 10% of original or zero)
+        let payment_contract_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaymentContractAddress)
+            .expect("Payment contract not configured");
+        let payment_client =
+            payment_contract::PaymentContractClient::new(&env, &payment_contract_addr);
+        if let Ok(Ok(payment)) = payment_client.try_get_payment(&refund.payment_id) {
+            let remaining_refundable = payment.amount - new_total;
+            if remaining_refundable <= payment.amount / 10 {
+                events::emit_partial_refund_cap_applied(
+                    &env,
+                    refund_id,
+                    remaining_refundable,
+                );
             }
         }
 
@@ -835,6 +876,27 @@ impl AhjoorRefundContract {
         offset: u32,
     ) -> Vec<u32> {
         Self::paginate(&env, &DataKey::MerchantRefunds(merchant), limit, offset)
+    }
+
+    /// Get the remaining refundable amount for a payment.
+    pub fn get_refundable_remaining(env: Env, payment_id: u32) -> i128 {
+        let payment_contract_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaymentContractAddress)
+            .expect("Payment contract not configured");
+        let payment_client =
+            payment_contract::PaymentContractClient::new(&env, &payment_contract_addr);
+        let payment = payment_client
+            .try_get_payment(&payment_id)
+            .unwrap_or_else(|_| panic!("PaymentContractError: payment not found"))
+            .unwrap_or_else(|_| panic!("PaymentContractError: payment not found"));
+        let already_refunded: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RefundedAmount(payment_id))
+            .unwrap_or(0);
+        payment.amount - already_refunded
     }
 
     /// Get all refund IDs for a given payment ID.

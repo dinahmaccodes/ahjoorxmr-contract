@@ -180,6 +180,14 @@ pub fn emit_refund_auto_approved(e: &Env, refund_id: u32, customer: Address, amo
     .publish(e);
 }
 
+pub fn emit_partial_refund_cap_applied(e: &Env, refund_id: u32, remaining_refundable: i128) {
+    PartialRefundCapApplied {
+        refund_id,
+        remaining_refundable,
+    }
+    .publish(e);
+}
+
 pub fn emit_contract_paused(e: &Env, admin: Address, reason: String, timestamp: u64) {
     ContractPaused {
         admin,
