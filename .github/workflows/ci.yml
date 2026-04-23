@@ -8,26 +8,47 @@ on:
 
 jobs:
   tests:
-    name: Workspace Tests (No Warnings)
+    name: Contract Tests (No Warnings)
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: -Dwarnings
+    strategy:
+      matrix:
+        contract:
+          - ahjoor-escrow
+          - ahjoor-payments
+          - ahjoor-refund
+          - ahjoor-rosca
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/${{ matrix.contract }}
 
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Run tests for ${{ matrix.contract }}
+        run: cargo test --manifest-path contracts/${{ matrix.contract }}/Cargo.toml
+
+      - name: Build WASM for ${{ matrix.contract }}
+        run: cargo build --manifest-path contracts/${{ matrix.contract }}/Cargo.toml --target wasm32-unknown-unknown --release
 
   coverage:
     name: Coverage Gate
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        contract:
+          - ahjoor-escrow
+          - ahjoor-payments
+          - ahjoor-refund
+          - ahjoor-rosca
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,9 +58,11 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts/${{ matrix.contract }}
 
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
 
-      - name: Enforce coverage thresholds
-        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 90 --fail-under-regions 85
+      - name: Enforce coverage thresholds for ${{ matrix.contract }}
+        run: cargo llvm-cov --manifest-path contracts/${{ matrix.contract }}/Cargo.toml --summary-only --fail-under-lines 90 --fail-under-regions 85

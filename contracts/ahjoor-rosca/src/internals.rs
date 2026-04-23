@@ -68,6 +68,17 @@ pub(crate) fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
         .get(&DataKey::ApprovedTokens)
         .unwrap_or(Vec::new(env));
 
+    // Get protocol fee configuration
+    let fee_bps: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::FeeBps)
+        .unwrap_or(0);
+    let fee_recipient_opt: Option<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::FeeRecipient);
+
     let mut total_payout_history_amt = 0i128;
 
     for token_addr in approved_tokens.iter() {
@@ -80,7 +91,31 @@ pub(crate) fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
         }
 
         if balance > 0 {
-            client.transfer(&env.current_contract_address(), &payout_recipient, &balance);
+            // Calculate protocol fee
+            let fee_amount = if fee_bps > 0 && fee_recipient_opt.is_some() {
+                (balance * (fee_bps as i128)) / 10_000
+            } else {
+                0
+            };
+
+            let payout_amount = balance - fee_amount;
+
+            // Transfer payout to recipient
+            if payout_amount > 0 {
+                client.transfer(&env.current_contract_address(), &payout_recipient, &payout_amount);
+            }
+
+            // Transfer fee to fee recipient
+            if fee_amount > 0 {
+                if let Some(fee_recipient) = fee_recipient_opt.clone() {
+                    client.transfer(&env.current_contract_address(), &fee_recipient, &fee_amount);
+                    
+                    // Emit fee collected event (only for base token to avoid duplicates)
+                    if token_addr == base_token {
+                        events::emit_fee_collected(env, current_round, fee_amount, fee_recipient);
+                    }
+                }
+            }
         }
     }
 

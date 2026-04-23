@@ -127,6 +127,9 @@ fn default_init(setup: &TestSetup<'_>) {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 }
@@ -240,6 +243,9 @@ fn test_admin_assigned_strategy_execution() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -274,6 +280,9 @@ fn test_invalid_admin_order_validation() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
     assert_eq!(
@@ -325,6 +334,9 @@ fn test_admin_assigned_e2e_all_rounds() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -362,6 +374,9 @@ fn test_single_defaulter_penalty() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -405,6 +420,9 @@ fn test_multiple_defaulters_penalty() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -445,6 +463,9 @@ fn test_member_suspension_after_two_defaults() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -508,6 +529,9 @@ fn test_suspended_member_skipped_in_payout() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -574,6 +598,9 @@ fn test_cannot_penalise_before_deadline() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -608,6 +635,9 @@ fn test_penalty_disabled_when_amount_zero() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -651,6 +681,9 @@ fn test_cannot_penalise_non_defaulter() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -698,6 +731,9 @@ fn test_read_interface_lifecycle() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -769,6 +805,9 @@ fn test_member_status_resets_after_round() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -824,6 +863,9 @@ fn test_add_member_before_round() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -875,6 +917,9 @@ fn test_add_member_mid_round_panics() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -924,6 +969,9 @@ fn test_remove_member_between_rounds() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -977,6 +1025,9 @@ fn test_remove_member_mid_round_panics() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1028,6 +1079,9 @@ fn test_remove_member_who_already_received_payout() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1123,6 +1177,9 @@ fn test_init_with_approved_token() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 }
@@ -1160,6 +1217,9 @@ fn test_init_with_unapproved_token_panics() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
     assert_eq!(res.unwrap_err().unwrap(), Error::TokenNotApproved.into());
@@ -1190,6 +1250,9 @@ fn test_init_twice_panics() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1207,6 +1270,9 @@ fn test_init_twice_panics() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
     assert_eq!(res.unwrap_err().unwrap(), Error::AlreadyInitialized.into());
@@ -1233,6 +1299,9 @@ fn test_contribute_non_member_panics() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1265,6 +1334,9 @@ fn test_contribute_twice_panics() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1302,6 +1374,9 @@ fn test_payout_correct_member_n_group() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1369,6 +1444,9 @@ fn test_contract_balance_zero_after_round() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1406,6 +1484,9 @@ fn test_single_member_rosca() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1447,6 +1528,9 @@ fn test_large_group_rosca() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1493,6 +1577,9 @@ fn test_get_state_lifecycle_details() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1542,6 +1629,9 @@ fn test_bump_storage() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1584,6 +1674,9 @@ fn test_reward_distribution_scenarios() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1661,6 +1754,9 @@ fn test_contribution_pot_separation() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -1732,6 +1828,9 @@ fn setup_exit_env(
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2008,6 +2107,9 @@ fn test_exit_with_zero_penalty() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2122,6 +2224,9 @@ fn test_pause_and_resume_flow() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2186,6 +2291,9 @@ fn test_paused_blocks_contribute() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2220,6 +2328,9 @@ fn test_cannot_pause_already_paused() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2255,6 +2366,9 @@ fn test_cannot_resume_not_paused() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2307,6 +2421,9 @@ fn test_get_member_contribution_status() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2369,6 +2486,9 @@ fn test_overpayment_rejected() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2401,6 +2521,9 @@ fn test_emit_deadline_reminder() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2467,6 +2590,9 @@ fn test_get_upcoming_deadlines() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2504,6 +2630,9 @@ fn test_create_proposal() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2552,6 +2681,9 @@ fn test_vote_on_proposal() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2598,6 +2730,9 @@ fn test_execute_proposal_with_quorum() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2652,6 +2787,9 @@ fn test_proposal_insufficient_quorum() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2703,6 +2841,9 @@ fn test_proposal_voted_down() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2755,6 +2896,9 @@ fn test_penalty_appeal_execution() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2817,6 +2961,9 @@ fn test_member_removal_execution() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2870,6 +3017,9 @@ fn test_non_member_cannot_create_proposal() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2910,6 +3060,9 @@ fn test_cannot_vote_after_deadline() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2958,6 +3111,9 @@ fn test_cannot_vote_twice() {
             exit_penalty_bps: 1000,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -2996,6 +3152,9 @@ fn test_get_member_status_non_member() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -3032,6 +3191,9 @@ fn test_get_member_status_active_member() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -3073,6 +3235,9 @@ fn test_get_member_status_suspended_member() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 2,  // Suspend after 2 defaults
         },
     );
 
@@ -3117,6 +3282,9 @@ fn test_get_member_status_exited_member() {
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -3474,6 +3642,9 @@ fn setup_finalize_env(
             exit_penalty_bps: 0,
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 
@@ -3601,6 +3772,9 @@ fn setup_exit_penalty_env(
             exit_penalty_bps: 1000, // 10%
             collective_goal: None,
             member_goals: None,
+            fee_bps: 0,
+            fee_recipient: None,
+            max_defaults: 3,
         },
     );
 

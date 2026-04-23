@@ -44,6 +44,16 @@ impl AhjoorContract {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
 
+        // Validate fee_bps: max 500 bps (5%)
+        if config.fee_bps > 500 {
+            panic_with_error!(&env, Error::FeeExceedsMaximum);
+        }
+
+        // Validate max_defaults: must be at least 1
+        if config.max_defaults < 1 {
+            panic_with_error!(&env, Error::InvalidMaxDefaults);
+        }
+
         let approved_tokens: Vec<Address> = env
             .storage()
             .instance()
@@ -176,6 +186,22 @@ impl AhjoorContract {
             &DataKey::MemberContributions,
             &Map::<Address, i128>::new(&env),
         );
+
+        // Protocol Fee Configuration
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeBps, &config.fee_bps);
+        if let Some(recipient) = config.fee_recipient {
+            env.storage()
+                .instance()
+                .set(&DataKey::FeeRecipient, &recipient);
+        }
+
+        // Suspension Threshold Configuration
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxDefaults, &config.max_defaults);
+        events::emit_suspension_threshold_set(&env, config.max_defaults);
 
         // Savings Goal Initialization
         if let Some(goal) = config.collective_goal {
@@ -424,7 +450,7 @@ impl AhjoorContract {
             .unwrap();
 
         let amount_to_transfer = if token == base_token {
-            base_amount
+            amount  // For base token, transfer the exact amount specified
         } else {
             let rates: Map<Address, i128> = env
                 .storage()
@@ -435,9 +461,9 @@ impl AhjoorContract {
             if rate <= 0 {
                 panic_with_error!(&env, Error::InvalidExchangeRate);
             }
-            // Valuation logic: RequiredAmount = (BaseAmount * 10^7) / Rate
+            // Valuation logic: RequiredAmount = (Amount * 10^7) / Rate
             // Rate is expected to be in 10^7 precision (e.g., 1.5 * 10^7 = 15,000,000)
-            (base_amount * 10_000_000) / rate
+            (amount * 10_000_000) / rate
         };
 
         // Check token-specific limits
@@ -491,6 +517,18 @@ impl AhjoorContract {
             token,
             amount_to_transfer,
         );
+
+        // Emit partial contribution event if not yet fully paid
+        let remaining_after = base_amount - new_total;
+        if remaining_after > 0 {
+            events::emit_partial_contribution(
+                &env,
+                contributor.clone(),
+                current_round,
+                amount,
+                remaining_after,
+            );
+        }
 
         // Only mark as fully paid (and track participation) when target is reached
         if new_total == base_amount {
@@ -709,14 +747,20 @@ impl AhjoorContract {
         internals::complete_round_payout(&env, &paid_members);
 
         // Apply default tracking and suspensions after the payout
+        let max_defaults: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDefaults)
+            .unwrap_or(3);
+
         for member in defaulters.iter() {
             let count = default_count.get(member.clone()).unwrap_or(0) + 1;
             default_count.set(member.clone(), count);
 
             events::emit_defaulted(&env, member.clone(), current_round, penalty_amount, count);
 
-            // Suspend after 3 consecutive missed rounds
-            if count >= 3 && !suspended_members.contains(&member) {
+            // Suspend after reaching max_defaults consecutive missed rounds
+            if count >= max_defaults && !suspended_members.contains(&member) {
                 suspended_members.push_back(member.clone());
                 events::emit_suspended(&env, member.clone(), count);
             }
@@ -792,7 +836,13 @@ impl AhjoorContract {
             new_default_count,
         );
 
-        if new_default_count >= 2 {
+        let max_defaults: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxDefaults)
+            .unwrap_or(3);
+
+        if new_default_count >= max_defaults {
             let mut suspended_members: Vec<Address> = env
                 .storage()
                 .instance()
@@ -1748,6 +1798,53 @@ impl AhjoorContract {
             .unwrap_or(51)
     }
 
+    /// Update the protocol fee configuration. Admin only.
+    /// Fee is capped at 500 bps (5%).
+    pub fn update_fee(env: Env, new_fee_bps: u32) {
+        internals::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        if new_fee_bps > 500 {
+            panic_with_error!(&env, Error::FeeExceedsMaximum);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeBps, &new_fee_bps);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the current protocol fee in basis points.
+    pub fn get_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(0)
+    }
+
+    /// Get the protocol fee recipient address.
+    pub fn get_fee_recipient(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeRecipient)
+    }
+
+    /// Get the maximum number of consecutive defaults before suspension.
+    pub fn get_max_defaults(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxDefaults)
+            .unwrap_or(3)
+    }
+
     // --- EMERGENCY EXIT ---
 
     pub fn pause_group(env: Env, reason: soroban_sdk::String) {
@@ -2085,4 +2182,5 @@ impl AhjoorContract {
     }
 }
 mod test;
+mod test_new_features;
 pub use events::*;

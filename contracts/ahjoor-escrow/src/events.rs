@@ -1,4 +1,4 @@
-use soroban_sdk::{contractevent, Address, Env, String};
+use soroban_sdk::{contractevent, Address, BytesN, Env, String};
 
 /// Event: Escrow created
 #[contractevent]
@@ -137,6 +137,22 @@ pub struct TokenRemovedFromAllowlist {
     pub token: Address,
 }
 
+/// Event: Arbiter added to or removed from the pool
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ArbiterPoolUpdated {
+    pub arbiter: Address,
+    pub added: bool,
+}
+
+/// Event: Arbiter assigned to an escrow via pool round-robin
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ArbiterAssigned {
+    pub escrow_id: u32,
+    pub arbiter: Address,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_escrow_created(
@@ -239,6 +255,24 @@ pub fn emit_escrow_refunded(e: &Env, escrow_id: u32, buyer: Address, amount: i12
     .publish(e);
 }
 
+/// Event: Protocol fee paid on dispute resolution
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ProtocolFeePaid {
+    pub escrow_id: u32,
+    pub fee_amount: i128,
+    pub fee_recipient: Address,
+}
+
+pub fn emit_protocol_fee_paid(e: &Env, escrow_id: u32, fee_amount: i128, fee_recipient: Address) {
+    ProtocolFeePaid {
+        escrow_id,
+        fee_amount,
+        fee_recipient,
+    }
+    .publish(e);
+}
+
 pub fn emit_contract_upgraded(e: &Env, old_version: u32, new_version: u32, by_admin: Address) {
     ContractUpgraded {
         old_version,
@@ -291,4 +325,119 @@ pub fn emit_token_allowlisted(e: &Env, admin: Address, token: Address) {
 
 pub fn emit_token_removed_from_allowlist(e: &Env, admin: Address, token: Address) {
     TokenRemovedFromAllowlist { admin, token }.publish(e);
+}
+
+/// Event: Escrow template created
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowTemplateCreated {
+    pub template_id: u32,
+    pub creator: Address,
+}
+
+/// Event: Escrow template config updated
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowTemplateUpdated {
+    pub template_id: u32,
+    pub creator: Address,
+}
+
+/// Event: Escrow template deactivated
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowTemplateDeactivated {
+    pub template_id: u32,
+    pub creator: Address,
+}
+
+/// Event: Escrow created from a template
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowCreatedFromTemplate {
+    pub escrow_id: u32,
+    pub template_id: u32,
+}
+
+pub fn emit_escrow_template_created(e: &Env, template_id: u32, creator: Address) {
+    EscrowTemplateCreated { template_id, creator }.publish(e);
+}
+
+pub fn emit_escrow_template_updated(e: &Env, template_id: u32, creator: Address) {
+    EscrowTemplateUpdated { template_id, creator }.publish(e);
+}
+
+pub fn emit_escrow_template_deactivated(e: &Env, template_id: u32, creator: Address) {
+    EscrowTemplateDeactivated { template_id, creator }.publish(e);
+}
+
+pub fn emit_escrow_created_from_template(e: &Env, escrow_id: u32, template_id: u32) {
+    EscrowCreatedFromTemplate { escrow_id, template_id }.publish(e);
+}
+
+pub fn emit_arbiter_pool_updated(e: &Env, arbiter: Address, added: bool) {
+    ArbiterPoolUpdated { arbiter, added }.publish(e);
+}
+
+pub fn emit_arbiter_assigned(e: &Env, escrow_id: u32, arbiter: Address) {
+    ArbiterAssigned { escrow_id, arbiter }.publish(e);
+}
+
+// --- Issue #145: Escrow Metadata ---
+
+/// Event: Escrow metadata hash updated
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowMetadataUpdated {
+    pub escrow_id: u32,
+    pub new_hash: BytesN<32>,
+    pub updated_by: Address,
+}
+
+pub fn emit_escrow_metadata_updated(
+    e: &Env,
+    escrow_id: u32,
+    new_hash: BytesN<32>,
+    updated_by: Address,
+) {
+    EscrowMetadataUpdated {
+        escrow_id,
+        new_hash,
+        updated_by,
+    }
+    .publish(e);
+}
+
+// --- Issue #148: Multi-Party Escrow ---
+
+/// Event: Multi-party escrow created
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MultiPartyEscrowCreated {
+    pub escrow_id: u32,
+    pub sellers_count: u32,
+}
+
+/// Event: Multi-party escrow released with distributions
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MultiPartyEscrowReleased {
+    pub escrow_id: u32,
+    pub total_amount: i128,
+}
+
+pub fn emit_multi_party_escrow_created(e: &Env, escrow_id: u32, sellers_count: u32) {
+    MultiPartyEscrowCreated {
+        escrow_id,
+        sellers_count,
+    }
+    .publish(e);
+}
+
+pub fn emit_multi_party_escrow_released(e: &Env, escrow_id: u32, total_amount: i128) {
+    MultiPartyEscrowReleased {
+        escrow_id,
+        total_amount,
+    }
+    .publish(e);
 }
