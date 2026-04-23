@@ -153,6 +153,24 @@ pub struct ArbiterAssigned {
     pub arbiter: Address,
 }
 
+/// Event: Evidence hash submitted for a dispute
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EvidenceSubmitted {
+    pub escrow_id: u32,
+    pub party: Address,
+    pub evidence_hash: BytesN<32>,
+}
+
+/// Event: Escrow renewed automatically on release
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowAutoRenewed {
+    pub old_escrow_id: u32,
+    pub new_escrow_id: u32,
+    pub renewals_remaining: u32,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_escrow_created(
@@ -381,6 +399,20 @@ pub fn emit_evidence_submitted(e: &Env, escrow_id: u32, party: Address, evidence
         escrow_id,
         party,
         evidence_hash,
+    }
+    .publish(e);
+}
+
+pub fn emit_escrow_auto_renewed(
+    e: &Env,
+    old_escrow_id: u32,
+    new_escrow_id: u32,
+    renewals_remaining: u32,
+) {
+    EscrowAutoRenewed {
+        old_escrow_id,
+        new_escrow_id,
+        renewals_remaining,
     }
     .publish(e);
 }

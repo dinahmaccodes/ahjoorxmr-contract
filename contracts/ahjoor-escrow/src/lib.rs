@@ -36,6 +36,17 @@ pub struct Escrow {
     pub deadline: u64,
     pub metadata_hash: Option<BytesN<32>>,
     pub sellers: Vec<(Address, u32)>, // (address, bps) — multi-party sellers
+    pub auto_renew: bool,
+    pub renewal_count: u32,
+    pub renewals_remaining: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidenceSubmission {
+    pub evidence_hash: BytesN<32>,
+    pub evidence_uri_hash: BytesN<32>,
+    pub submitted_at: u64,
 }
 
 #[contracttype]
@@ -103,6 +114,7 @@ pub enum DataKey {
     ArbiterNeedsReplacement(u32),
     EscrowMetadata(u32),
     Evidence(u32, Address),
+    RenewalAllowance(u32),
 }
 
 const MAX_PROTOCOL_FEE_BPS: u32 = 200; // 2%
@@ -142,6 +154,8 @@ impl AhjoorEscrowContract {
         deadline: u64,
         metadata_hash: Option<BytesN<32>>,
         sellers: Vec<(Address, u32)>,
+        auto_renew: bool,
+        renewal_count: u32,
     ) -> u32 {
         Self::require_not_paused(&env);
         buyer.require_auth();
@@ -209,6 +223,13 @@ impl AhjoorEscrowContract {
             deadline,
             metadata_hash: metadata_hash.clone(),
             sellers: resolved_sellers.clone(),
+            auto_renew,
+            renewal_count,
+            renewals_remaining: if renewal_count == 0 {
+                0
+            } else {
+                renewal_count
+            },
         };
 
         env.storage()
@@ -259,6 +280,8 @@ impl AhjoorEscrowContract {
             .persistent()
             .get(&DataKey::Escrow(escrow_id))
             .expect("Escrow not found");
+
+        let renewal_source = escrow.clone();
 
         if !Self::is_open_escrow_status(escrow.status) {
             panic!("Escrow is not active");
@@ -313,6 +336,152 @@ impl AhjoorEscrowContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        Self::try_auto_renew(&env, escrow_id, &renewal_source);
+    }
+
+    /// Submit evidence hash anchors for an escrow dispute workflow.
+    pub fn submit_evidence(
+        env: Env,
+        party: Address,
+        escrow_id: u32,
+        evidence_hash: BytesN<32>,
+        evidence_uri_hash: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        party.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if party != escrow.buyer && party != escrow.seller {
+            panic!("Only buyer or seller can submit evidence");
+        }
+
+        let key = DataKey::Evidence(escrow_id, party.clone());
+        let mut entries: Vec<EvidenceSubmission> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+
+        if entries.len() >= MAX_EVIDENCE_ENTRIES_PER_PARTY {
+            panic!("Maximum evidence entries reached for this party");
+        }
+
+        entries.push_back(EvidenceSubmission {
+            evidence_hash: evidence_hash.clone(),
+            evidence_uri_hash,
+            submitted_at: env.ledger().timestamp(),
+        });
+
+        env.storage().persistent().set(&key, &entries);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_evidence_submitted(&env, escrow_id, party, evidence_hash);
+    }
+
+    /// Returns evidence submissions for buyer and seller in one call.
+    pub fn get_evidence(env: Env, escrow_id: u32) -> Vec<(Address, Vec<EvidenceSubmission>)> {
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        let mut all: Vec<(Address, Vec<EvidenceSubmission>)> = Vec::new(&env);
+
+        let buyer_key = DataKey::Evidence(escrow_id, escrow.buyer.clone());
+        let buyer_entries: Vec<EvidenceSubmission> = env
+            .storage()
+            .persistent()
+            .get(&buyer_key)
+            .unwrap_or(Vec::new(&env));
+        if !buyer_entries.is_empty() {
+            all.push_back((escrow.buyer.clone(), buyer_entries));
+        }
+
+        let seller_key = DataKey::Evidence(escrow_id, escrow.seller.clone());
+        let seller_entries: Vec<EvidenceSubmission> = env
+            .storage()
+            .persistent()
+            .get(&seller_key)
+            .unwrap_or(Vec::new(&env));
+        if !seller_entries.is_empty() {
+            all.push_back((escrow.seller, seller_entries));
+        }
+
+        all
+    }
+
+    /// Buyer pre-approves renewal cycles for a specific escrow chain.
+    pub fn set_renewal_allowance(env: Env, buyer: Address, escrow_id: u32, total_renewals: u32) {
+        Self::require_not_paused(&env);
+        buyer.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if buyer != escrow.buyer {
+            panic!("Only buyer can set renewal allowance");
+        }
+
+        if !escrow.auto_renew {
+            panic!("Auto-renew is not enabled for this escrow");
+        }
+
+        let total_amount = escrow.amount * total_renewals as i128;
+        let expiration_ledger = env.ledger().sequence().saturating_add(100_000);
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.approve(
+            &buyer,
+            &env.current_contract_address(),
+            &total_amount,
+            &expiration_ledger,
+        );
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::RenewalAllowance(escrow_id), &total_renewals);
+        env.storage().persistent().extend_ttl(
+            &DataKey::RenewalAllowance(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+
+    /// Buyer can disable auto-renew at any time.
+    pub fn cancel_auto_renew(env: Env, buyer: Address, escrow_id: u32) {
+        Self::require_not_paused(&env);
+        buyer.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if buyer != escrow.buyer {
+            panic!("Only buyer can cancel auto-renew");
+        }
+
+        escrow.auto_renew = false;
+        escrow.renewals_remaining = 0;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().remove(&DataKey::RenewalAllowance(escrow_id));
     }
 
     // --- Issue #141: Evidence Hash Anchoring ---
@@ -1136,6 +1305,9 @@ impl AhjoorEscrowContract {
             deadline,
             metadata_hash: None,
             sellers: single_seller,
+            auto_renew: false,
+            renewal_count: 0,
+            renewals_remaining: 0,
         };
 
         env.storage()
@@ -1310,6 +1482,9 @@ impl AhjoorEscrowContract {
             deadline,
             metadata_hash: None,
             sellers: single_seller,
+            auto_renew: false,
+            renewal_count: 0,
+            renewals_remaining: 0,
         };
 
         env.storage()
@@ -1487,6 +1662,84 @@ impl AhjoorEscrowContract {
             .instance()
             .set(&DataKey::EscrowCounter, &counter);
         id
+    }
+
+    fn try_auto_renew(env: &Env, old_escrow_id: u32, source: &Escrow) {
+        if !source.auto_renew {
+            return;
+        }
+
+        if source.renewal_count != 0 && source.renewals_remaining == 0 {
+            return;
+        }
+
+        let allowance: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RenewalAllowance(old_escrow_id))
+            .unwrap_or(0);
+        if allowance == 0 {
+            panic!("Insufficient renewal allowance");
+        }
+
+        let duration = source.deadline.saturating_sub(source.created_at);
+        if duration == 0 {
+            panic!("Escrow renewal duration must be positive");
+        }
+
+        let client = token::Client::new(env, &source.token);
+        client.transfer_from(
+            &env.current_contract_address(),
+            &source.buyer,
+            &env.current_contract_address(),
+            &source.amount,
+        );
+
+        let new_escrow_id = Self::next_escrow_id(env);
+        let now = env.ledger().timestamp();
+        let renewals_remaining = if source.renewal_count == 0 {
+            0
+        } else {
+            source.renewals_remaining - 1
+        };
+
+        let renewed = Escrow {
+            id: new_escrow_id,
+            buyer: source.buyer.clone(),
+            seller: source.seller.clone(),
+            arbiter: source.arbiter.clone(),
+            amount: source.amount,
+            token: source.token.clone(),
+            status: EscrowStatus::Active,
+            created_at: now,
+            deadline: now + duration,
+            metadata_hash: source.metadata_hash.clone(),
+            sellers: source.sellers.clone(),
+            auto_renew: source.auto_renew,
+            renewal_count: source.renewal_count,
+            renewals_remaining,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(new_escrow_id), &renewed);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(new_escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        let remaining_allowance = allowance - 1;
+        env.storage()
+            .persistent()
+            .set(&DataKey::RenewalAllowance(new_escrow_id), &remaining_allowance);
+        env.storage().persistent().extend_ttl(
+            &DataKey::RenewalAllowance(new_escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_escrow_auto_renewed(env, old_escrow_id, new_escrow_id, renewals_remaining);
     }
 
     fn get_or_init_version(env: &Env) -> u32 {
