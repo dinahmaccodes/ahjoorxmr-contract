@@ -346,8 +346,12 @@ fn test_dispute_escrow_by_arbiter_panics() {
         s.client
             .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
 
-    s.client
-        .dispute_escrow(&arbiter, &escrow_id, &String::from_str(&s.env, "Invalid"), &250);
+    s.client.dispute_escrow(
+        &arbiter,
+        &escrow_id,
+        &String::from_str(&s.env, "Invalid"),
+        &250,
+    );
 }
 
 // ===========================================================================
@@ -600,6 +604,169 @@ fn test_resolve_dispute_by_buyer_panics() {
         &250,
     );
     s.client.resolve_dispute(&buyer, &escrow_id, &true);
+}
+
+// ===========================================================================
+//  Protocol Fee Tests
+// ===========================================================================
+
+#[test]
+fn test_protocol_fee_deducted_on_resolve_to_seller() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let fee_recipient = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    // 100 bps = 1%
+    s.client.update_protocol_fee(&s.admin, &100, &fee_recipient);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &1000, &s.token_addr, &deadline);
+
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Dispute"),
+        &1000,
+    );
+    s.client.resolve_dispute(&arbiter, &escrow_id, &true);
+
+    // fee = 1000 * 100 / 10000 = 10; seller gets 990
+    assert_eq!(s.token_client.balance(&seller), 990);
+    assert_eq!(s.token_client.balance(&fee_recipient), 10);
+    assert_eq!(s.token_client.balance(&s.client.address), 0);
+}
+
+#[test]
+fn test_protocol_fee_deducted_on_resolve_to_buyer() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let fee_recipient = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    // 200 bps = 2%
+    s.client.update_protocol_fee(&s.admin, &200, &fee_recipient);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &500, &s.token_addr, &deadline);
+
+    s.client.dispute_escrow(
+        &seller,
+        &escrow_id,
+        &String::from_str(&s.env, "Dispute"),
+        &500,
+    );
+    s.client.resolve_dispute(&arbiter, &escrow_id, &false);
+
+    // fee = 500 * 200 / 10000 = 10; buyer gets 490, started with 500 after deposit
+    assert_eq!(s.token_client.balance(&buyer), 990); // 1000 - 500 deposited + 490 refunded
+    assert_eq!(s.token_client.balance(&fee_recipient), 10);
+    assert_eq!(s.token_client.balance(&s.client.address), 0);
+}
+
+#[test]
+fn test_zero_protocol_fee_skips_fee_transfer() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let fee_recipient = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    // fee_bps = 0, no fee transfer should happen
+    s.client.update_protocol_fee(&s.admin, &0, &fee_recipient);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &250, &s.token_addr, &deadline);
+
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Dispute"),
+        &250,
+    );
+    s.client.resolve_dispute(&arbiter, &escrow_id, &true);
+
+    assert_eq!(s.token_client.balance(&seller), 250);
+    assert_eq!(s.token_client.balance(&fee_recipient), 0);
+    assert_eq!(s.token_client.balance(&s.client.address), 0);
+}
+
+#[test]
+fn test_protocol_fee_cap_enforced() {
+    let s = setup();
+    let fee_recipient = Address::generate(&s.env);
+
+    // 201 bps exceeds the 200 bps cap
+    let result = s
+        .client
+        .try_update_protocol_fee(&s.admin, &201, &fee_recipient);
+    assert!(result.is_err());
+
+    // 200 bps is exactly at the cap — should succeed
+    s.client.update_protocol_fee(&s.admin, &200, &fee_recipient);
+    let (fee_bps, _) = s.client.get_protocol_fee();
+    assert_eq!(fee_bps, 200);
+}
+
+#[test]
+fn test_non_admin_cannot_update_protocol_fee() {
+    let s = setup();
+    let non_admin = Address::generate(&s.env);
+    let fee_recipient = Address::generate(&s.env);
+
+    let result = s
+        .client
+        .try_update_protocol_fee(&non_admin, &100, &fee_recipient);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_protocol_fee_emits_event() {
+    let s = setup();
+    let buyer = Address::generate(&s.env);
+    let seller = Address::generate(&s.env);
+    let arbiter = Address::generate(&s.env);
+    let fee_recipient = Address::generate(&s.env);
+    s.token_admin_client.mint(&buyer, &1000);
+
+    s.client.update_protocol_fee(&s.admin, &100, &fee_recipient);
+
+    let deadline = s.env.ledger().timestamp() + 1000;
+    let escrow_id =
+        s.client
+            .create_escrow(&buyer, &seller, &arbiter, &1000, &s.token_addr, &deadline);
+
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Dispute"),
+        &1000,
+    );
+    s.client.resolve_dispute(&arbiter, &escrow_id, &true);
+
+    let events = s.env.events().all();
+    let fee_event = events
+        .iter()
+        .find(|e| e.1 == (Symbol::new(&s.env, "escrow_protocol_fee_paid"),).into_val(&s.env));
+    assert!(fee_event.is_some());
+
+    let data: soroban_sdk::Map<Symbol, soroban_sdk::Val> = fee_event.unwrap().2.into_val(&s.env);
+    let fee_amount: i128 = data
+        .get(Symbol::new(&s.env, "fee_amount"))
+        .unwrap()
+        .into_val(&s.env);
+    assert_eq!(fee_amount, 10);
 }
 
 // ===========================================================================
@@ -998,8 +1165,12 @@ fn test_write_functions_blocked_when_paused_reads_still_work() {
         s.client
             .create_escrow(&buyer, &seller, &arbiter, &200, &s.token_addr, &deadline);
 
-    s.client
-        .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "snapshot"), &200);
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "snapshot"),
+        &200,
+    );
 
     let events = s.env.events().all();
     assert!(!events.is_empty());
@@ -1156,8 +1327,12 @@ fn test_dispute_blocks_deadline_extension() {
         &initial_deadline,
     );
 
-    s.client
-        .dispute_escrow(&buyer, &escrow_id, &String::from_str(&s.env, "Need review"), &250);
+    s.client.dispute_escrow(
+        &buyer,
+        &escrow_id,
+        &String::from_str(&s.env, "Need review"),
+        &250,
+    );
 
     let result =
         s.client

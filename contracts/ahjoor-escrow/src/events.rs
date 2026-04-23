@@ -58,6 +58,15 @@ pub struct DisputeResolved {
     pub resolved_by: Address,
 }
 
+/// Event: Protocol fee paid on dispute resolution
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EscrowProtocolFeePaid {
+    pub escrow_id: u32,
+    pub fee_amount: i128,
+    pub fee_recipient: Address,
+}
+
 /// Event: Escrow refunded to buyer
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -224,6 +233,15 @@ pub fn emit_dispute_resolved(
         escrow_id,
         release_to_seller,
         resolved_by,
+    }
+    .publish(e);
+}
+
+pub fn emit_protocol_fee_paid(e: &Env, escrow_id: u32, fee_amount: i128, fee_recipient: Address) {
+    EscrowProtocolFeePaid {
+        escrow_id,
+        fee_amount,
+        fee_recipient,
     }
     .publish(e);
 }

@@ -362,12 +362,7 @@ impl AhjoorEscrowContract {
         );
 
         if released_amount > 0 {
-            events::emit_partial_dispute_raised(
-                &env,
-                escrow_id,
-                dispute_amount,
-                released_amount,
-            );
+            events::emit_partial_dispute_raised(&env, escrow_id, dispute_amount, released_amount);
         } else {
             events::emit_escrow_disputed(&env, escrow_id, caller, reason);
         }
@@ -470,12 +465,7 @@ impl AhjoorEscrowContract {
 
     /// Set protocol fee in basis points and fee recipient. Admin only.
     /// Max fee is 200 bps (2%).
-    pub fn update_protocol_fee(
-        env: Env,
-        admin: Address,
-        fee_bps: u32,
-        fee_recipient: Address,
-    ) {
+    pub fn update_protocol_fee(env: Env, admin: Address, fee_bps: u32, fee_recipient: Address) {
         Self::require_admin(&env, &admin);
         if fee_bps > MAX_PROTOCOL_FEE_BPS {
             panic!("Fee exceeds maximum of 200 bps");
@@ -498,10 +488,7 @@ impl AhjoorEscrowContract {
             .instance()
             .get(&DataKey::ProtocolFeeBps)
             .unwrap_or(0);
-        let fee_recipient: Option<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeRecipient);
+        let fee_recipient: Option<Address> = env.storage().instance().get(&DataKey::FeeRecipient);
         (fee_bps, fee_recipient)
     }
 
@@ -1214,8 +1201,6 @@ impl AhjoorEscrowContract {
             EscrowStatus::Active | EscrowStatus::PartiallyReleased
         )
     }
-
-
 
     fn is_terminal_escrow_status(status: EscrowStatus) -> bool {
         matches!(
