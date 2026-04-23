@@ -13,6 +13,15 @@ pub struct EscrowCreated {
     pub deadline: u64,
 }
 
+/// Event: Batch escrow created summary
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BatchEscrowCreated {
+    pub count: u32,
+    pub first_id: u32,
+    pub last_id: u32,
+}
+
 /// Event: Escrow released to seller
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -199,6 +208,15 @@ pub fn emit_escrow_created(
         amount,
         token,
         deadline,
+    }
+    .publish(e);
+}
+
+pub fn emit_batch_escrow_created(e: &Env, count: u32, first_id: u32, last_id: u32) {
+    BatchEscrowCreated {
+        count,
+        first_id,
+        last_id,
     }
     .publish(e);
 }
