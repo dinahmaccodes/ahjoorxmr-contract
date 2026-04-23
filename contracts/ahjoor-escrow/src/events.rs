@@ -255,24 +255,6 @@ pub fn emit_escrow_refunded(e: &Env, escrow_id: u32, buyer: Address, amount: i12
     .publish(e);
 }
 
-/// Event: Protocol fee paid on dispute resolution
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct ProtocolFeePaid {
-    pub escrow_id: u32,
-    pub fee_amount: i128,
-    pub fee_recipient: Address,
-}
-
-pub fn emit_protocol_fee_paid(e: &Env, escrow_id: u32, fee_amount: i128, fee_recipient: Address) {
-    ProtocolFeePaid {
-        escrow_id,
-        fee_amount,
-        fee_recipient,
-    }
-    .publish(e);
-}
-
 pub fn emit_contract_upgraded(e: &Env, old_version: u32, new_version: u32, by_admin: Address) {
     ContractUpgraded {
         old_version,
@@ -381,6 +363,26 @@ pub fn emit_arbiter_pool_updated(e: &Env, arbiter: Address, added: bool) {
 
 pub fn emit_arbiter_assigned(e: &Env, escrow_id: u32, arbiter: Address) {
     ArbiterAssigned { escrow_id, arbiter }.publish(e);
+}
+
+// --- Issue #141: Evidence Hash Anchoring ---
+
+/// Event: Evidence hash submitted for a dispute
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct EvidenceSubmitted {
+    pub escrow_id: u32,
+    pub party: Address,
+    pub evidence_hash: BytesN<32>,
+}
+
+pub fn emit_evidence_submitted(e: &Env, escrow_id: u32, party: Address, evidence_hash: BytesN<32>) {
+    EvidenceSubmitted {
+        escrow_id,
+        party,
+        evidence_hash,
+    }
+    .publish(e);
 }
 
 // --- Issue #145: Escrow Metadata ---

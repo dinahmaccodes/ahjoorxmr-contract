@@ -8,6 +8,7 @@ const INSTANCE_BUMP_AMOUNT: u32 = 120_000;
 const PERSISTENT_LIFETIME_THRESHOLD: u32 = 100_000;
 const PERSISTENT_BUMP_AMOUNT: u32 = 120_000;
 const DEADLINE_EXTENSION_PROPOSAL_WINDOW: u64 = 24 * 60 * 60;
+const MAX_EVIDENCE_ENTRIES_PER_PARTY: u32 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[contracttype]
@@ -35,6 +36,14 @@ pub struct Escrow {
     pub deadline: u64,
     pub metadata_hash: Option<BytesN<32>>,
     pub sellers: Vec<(Address, u32)>, // (address, bps) — multi-party sellers
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidenceSubmission {
+    pub evidence_hash: BytesN<32>,
+    pub evidence_uri_hash: BytesN<32>,
+    pub submitted_at: u64,
 }
 
 #[contracttype]
@@ -93,6 +102,7 @@ pub enum DataKey {
     NextArbiterIndex,
     ArbiterNeedsReplacement(u32),
     EscrowMetadata(u32),
+    Evidence(u32, Address),
 }
 
 const MAX_PROTOCOL_FEE_BPS: u32 = 200; // 2%
@@ -303,6 +313,89 @@ impl AhjoorEscrowContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    // --- Issue #141: Evidence Hash Anchoring ---
+
+    /// Submit evidence hash anchors for an escrow dispute workflow.
+    pub fn submit_evidence(
+        env: Env,
+        party: Address,
+        escrow_id: u32,
+        evidence_hash: BytesN<32>,
+        evidence_uri_hash: BytesN<32>,
+    ) {
+        Self::require_not_paused(&env);
+        party.require_auth();
+
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if party != escrow.buyer && party != escrow.seller {
+            panic!("Only buyer or seller can submit evidence");
+        }
+
+        let key = DataKey::Evidence(escrow_id, party.clone());
+        let mut entries: Vec<EvidenceSubmission> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+
+        if entries.len() >= MAX_EVIDENCE_ENTRIES_PER_PARTY {
+            panic!("Maximum evidence entries reached for this party");
+        }
+
+        entries.push_back(EvidenceSubmission {
+            evidence_hash: evidence_hash.clone(),
+            evidence_uri_hash,
+            submitted_at: env.ledger().timestamp(),
+        });
+
+        env.storage().persistent().set(&key, &entries);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_evidence_submitted(&env, escrow_id, party, evidence_hash);
+    }
+
+    /// Returns evidence submissions for buyer and seller in one call.
+    pub fn get_evidence(env: Env, escrow_id: u32) -> Vec<(Address, Vec<EvidenceSubmission>)> {
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        let mut all: Vec<(Address, Vec<EvidenceSubmission>)> = Vec::new(&env);
+
+        let buyer_key = DataKey::Evidence(escrow_id, escrow.buyer.clone());
+        let buyer_entries: Vec<EvidenceSubmission> = env
+            .storage()
+            .persistent()
+            .get(&buyer_key)
+            .unwrap_or(Vec::new(&env));
+        if !buyer_entries.is_empty() {
+            all.push_back((escrow.buyer.clone(), buyer_entries));
+        }
+
+        let seller_key = DataKey::Evidence(escrow_id, escrow.seller.clone());
+        let seller_entries: Vec<EvidenceSubmission> = env
+            .storage()
+            .persistent()
+            .get(&seller_key)
+            .unwrap_or(Vec::new(&env));
+        if !seller_entries.is_empty() {
+            all.push_back((escrow.seller, seller_entries));
+        }
+
+        all
     }
 
     /// Release part of the escrowed funds to seller. Can be called by buyer or arbiter.
