@@ -71,4 +71,14 @@ pub enum Error {
     InsufficientApprovals = 49,
     /// Not a co-admin.
     NotACoAdmin = 50,
+    /// Tier must be at least 1 bps.
+    InvalidTier = 51,
+    /// Insurance pool balance would go negative.
+    InsurancePoolNegative = 52,
+    /// Invalid insurance contribution amount.
+    InvalidInsuranceContribution = 53,
+    /// Member has reached the maximum allowed skips for the current cycle.
+    SkipLimitReached = 54,
+    /// Member has already requested a skip for this round.
+    AlreadySkipped = 55,
 }

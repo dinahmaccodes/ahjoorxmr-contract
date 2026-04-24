@@ -23,6 +23,7 @@ pub use types::*;
 mod errors;
 mod events;
 mod internals;
+mod test_tiers;
 
 use errors::Error;
 
@@ -251,6 +252,20 @@ impl AhjoorContract {
             .instance()
             .set(&DataKey::MilestonesReached, &Vec::<u32>::new(&env));
 
+        // Skip Functionality Initialization
+        env.storage()
+            .instance()
+            .set(&DataKey::SkipFee, &config.skip_fee);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxSkipsPerCycle, &config.max_skips_per_cycle);
+        env.storage()
+            .instance()
+            .set(&DataKey::SkipRequests, &Map::<(Address, u32), bool>::new(&env));
+        env.storage()
+            .instance()
+            .set(&DataKey::MemberSkips, &Map::<(Address, u32), u32>::new(&env));
+
         // Governance Initialization
         env.storage()
             .instance()
@@ -383,6 +398,114 @@ impl AhjoorContract {
         Self::get_or_init_version(&env)
     }
 
+    /// Set the contribution tier for a member. Tier changes take effect in the next round.
+    pub fn set_member_tier(env: Env, admin: Address, member: Address, tier_bps: u32) {
+        admin.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can set member tier");
+        }
+
+        if tier_bps == 0 {
+            panic_with_error!(&env, Error::InvalidTier);
+        }
+
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if !members.contains(&member) {
+            panic_with_error!(&env, Error::NotAMember);
+        }
+
+        let mut tiers: Map<Address, u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MemberTiers)
+            .unwrap_or(Map::new(&env));
+
+        tiers.set(member.clone(), tier_bps);
+        env.storage().instance().set(&DataKey::MemberTiers, &tiers);
+
+        events::emit_member_tier_set(&env, member, tier_bps);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    pub fn contribute_to_insurance(env: Env, contributor: Address, token: Address, amount: i128) {
+        internals::check_not_paused(&env);
+        contributor.require_auth();
+
+        if amount <= 0 {
+            panic_with_error!(&env, Error::InvalidInsuranceContribution);
+        }
+
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if !members.contains(&contributor) {
+            panic_with_error!(&env, Error::NotAMember);
+        }
+
+        let exited_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExitedMembers)
+            .unwrap_or(Vec::new(&env));
+        if exited_members.contains(&contributor) {
+            panic_with_error!(&env, Error::MemberHasExited);
+        }
+
+        let approved_tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+        if !approved_tokens.contains(&token) {
+            panic_with_error!(&env, Error::TokenNotApproved);
+        }
+
+        let client = token::Client::new(&env, &token);
+        client.transfer(
+            &contributor,
+            &env.current_contract_address(),
+            &amount,
+        );
+
+        let mut insurance_pool: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::InsurancePool)
+            .unwrap_or(0);
+        insurance_pool += amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::InsurancePool, &insurance_pool);
+
+        events::emit_insurance_top_up(&env, contributor, amount);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    pub fn get_insurance_pool(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::InsurancePool)
+            .unwrap_or(0)
+    }
+
     /// Get the proposed admin address, if any.
     pub fn get_proposed_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::ProposedAdmin)
@@ -478,6 +601,15 @@ impl AhjoorContract {
             .get(&DataKey::ContributionAmt)
             .unwrap();
 
+        // Calculate member-specific required amount based on tier
+        let tiers: Map<Address, u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MemberTiers)
+            .unwrap_or(Map::new(&env));
+        let tier_bps = tiers.get(contributor.clone()).unwrap_or(10_000); // Default to 1x (10000 bps)
+        let member_required_amount = (base_amount * tier_bps as i128) / 10_000;
+
         let amount_to_transfer = if token == base_token {
             amount  // For base token, transfer the exact amount specified
         } else {
@@ -507,12 +639,39 @@ impl AhjoorContract {
             }
         }
 
+        // Calculate insurance auto-deduction if configured
+        let insurance_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::InsuranceContributionBps)
+            .unwrap_or(0);
+        let insurance_deduction = if insurance_bps > 0 {
+            (amount_to_transfer * insurance_bps as i128) / 10_000
+        } else {
+            0
+        };
+        let total_transfer_amount = amount_to_transfer + insurance_deduction;
+
         let client = token::Client::new(&env, &token);
         client.transfer(
             &contributor,
             &env.current_contract_address(),
-            &amount_to_transfer,
+            &total_transfer_amount,
         );
+
+        // Update insurance pool if auto-deduction was applied
+        if insurance_deduction > 0 {
+            let mut insurance_pool: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::InsurancePool)
+                .unwrap_or(0);
+            insurance_pool += insurance_deduction;
+            env.storage()
+                .instance()
+                .set(&DataKey::InsurancePool, &insurance_pool);
+            events::emit_insurance_top_up(&env, contributor.clone(), insurance_deduction);
+        }
 
         let current_round: u32 = env
             .storage()
@@ -527,7 +686,7 @@ impl AhjoorContract {
             .get(&DataKey::MemberContributions)
             .unwrap_or(Map::new(&env));
         let already_paid: i128 = member_contributions.get(contributor.clone()).unwrap_or(0);
-        let remaining = base_amount - already_paid;
+        let remaining = member_required_amount - already_paid;
 
         if amount > remaining {
             panic_with_error!(&env, Error::ExceedsRemainingContribution);
@@ -548,7 +707,7 @@ impl AhjoorContract {
         );
 
         // Emit partial contribution event if not yet fully paid
-        let remaining_after = base_amount - new_total;
+        let remaining_after = member_required_amount - new_total;
         if remaining_after > 0 {
             events::emit_partial_contribution(
                 &env,
@@ -560,7 +719,7 @@ impl AhjoorContract {
         }
 
         // Only mark as fully paid (and track participation) when target is reached
-        if new_total == base_amount {
+        if new_total == member_required_amount {
             paid_members.push_back(contributor.clone());
             env.storage()
                 .instance()
@@ -590,7 +749,7 @@ impl AhjoorContract {
                 .set(&DataKey::MemberParticipation, &member_participation);
 
             // Only trigger payout when all members have fully contributed
-            if new_total == base_amount && paid_members.len() == members.len() {
+            if new_total == member_required_amount && paid_members.len() == members.len() {
                 internals::complete_round_payout(&env, &paid_members);
 
                 // Emit auto-close event if enabled
@@ -667,6 +826,126 @@ impl AhjoorContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
+    pub fn request_skip(env: Env, member: Address, round: u32) {
+        internals::check_not_paused(&env);
+        member.require_auth();
+
+        let current_round: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentRound)
+            .unwrap_or(0);
+
+        if round < current_round {
+            panic_with_error!(&env, Error::RoundDeadlinePassed);
+        }
+
+        let use_timestamp: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::UseTimestampSchedule)
+            .unwrap_or(false);
+
+        let deadline: u64 = if use_timestamp {
+            env.storage()
+                .instance()
+                .get(&DataKey::RoundDeadlineTimestamp)
+                .expect("Timestamp deadline not set")
+        } else {
+            env.storage()
+                .instance()
+                .get(&DataKey::RoundDeadline)
+                .expect("Deadline not set")
+        };
+
+        // Only allow skip for current round if before deadline
+        if round == current_round && env.ledger().timestamp() > deadline {
+            panic_with_error!(&env, Error::ContributionWindowClosed);
+        }
+
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if !members.contains(&member) {
+            panic_with_error!(&env, Error::NotAMember);
+        }
+
+        let mut skip_requests: Map<(Address, u32), bool> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SkipRequests)
+            .unwrap_or(Map::new(&env));
+
+        if skip_requests.get((member.clone(), round)).unwrap_or(false) {
+            panic_with_error!(&env, Error::AlreadySkipped);
+        }
+
+        // Check if already contributed this round
+        if round == current_round {
+            let paid_members: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::PaidMembers)
+                .expect("Not initialized");
+            if paid_members.contains(&member) {
+                panic_with_error!(&env, Error::AlreadyContributed);
+            }
+        }
+
+        let payout_order: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PayoutOrder)
+            .expect("Not initialized");
+        let cycle_index = round / (payout_order.len() as u32);
+        let max_skips: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxSkipsPerCycle)
+            .unwrap_or(0);
+
+        let mut member_skips: Map<(Address, u32), u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MemberSkips)
+            .unwrap_or(Map::new(&env));
+
+        let current_skips = member_skips.get((member.clone(), cycle_index)).unwrap_or(0);
+        if current_skips >= max_skips {
+            panic_with_error!(&env, Error::SkipLimitReached);
+        }
+
+        let skip_fee: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SkipFee)
+            .unwrap_or(0);
+
+        if skip_fee > 0 {
+            let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+            let client = token::Client::new(&env, &token_addr);
+            client.transfer(&member, &env.current_contract_address(), &skip_fee);
+        }
+
+        skip_requests.set((member.clone(), round), true);
+        member_skips.set((member.clone(), cycle_index), current_skips + 1);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::SkipRequests, &skip_requests);
+        env.storage()
+            .instance()
+            .set(&DataKey::MemberSkips, &member_skips);
+
+        events::emit_round_skip_requested(&env, member, round, skip_fee);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     pub fn close_round(env: Env) {
         internals::check_not_paused(&env);
         let admin: Address = env
@@ -706,9 +985,22 @@ impl AhjoorContract {
             .get(&DataKey::ExitedMembers)
             .unwrap_or(Vec::new(&env));
 
+        let skip_requests: Map<(Address, u32), bool> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SkipRequests)
+            .unwrap_or(Map::new(&env));
+
+        let current_round: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CurrentRound)
+            .unwrap();
+
         let mut defaulters = Vec::new(&env);
         for member in members.iter() {
-            if !paid_members.contains(&member) && !exited_members.contains(&member) {
+            let has_skipped = skip_requests.get((member.clone(), current_round)).unwrap_or(false);
+            if !paid_members.contains(&member) && !exited_members.contains(&member) && !has_skipped {
                 defaulters.push_back(member);
             }
         }
@@ -795,10 +1087,17 @@ impl AhjoorContract {
             .get(&DataKey::SuspendedMembers)
             .unwrap_or(Vec::new(&env));
 
-        // Identify defaulters (non-contributors, non-exited)
+        let skip_requests: Map<(Address, u32), bool> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SkipRequests)
+            .unwrap_or(Map::new(&env));
+
+        // Identify defaulters (non-contributors, non-exited, non-skippers)
         let mut defaulters: Vec<Address> = Vec::new(&env);
         for member in members.iter() {
-            if !paid_members.contains(&member) && !exited_members.contains(&member) {
+            let has_skipped = skip_requests.get((member.clone(), current_round)).unwrap_or(false);
+            if !paid_members.contains(&member) && !exited_members.contains(&member) && !has_skipped {
                 defaulters.push_back(member.clone());
             }
         }
@@ -1325,6 +1624,23 @@ impl AhjoorContract {
         let proposal_id = proposal_counter;
         proposal_counter += 1;
 
+        let quorum_config: Map<ProposalType, u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::QuorumConfig)
+            .unwrap_or(Map::new(&env));
+
+        let required_quorum = if let Some(q) = quorum_config.get(proposal_type) {
+            q
+        } else {
+            let global_q: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::QuorumPercentage)
+                .unwrap_or(51);
+            global_q * 100 // Convert % to bps
+        };
+
         let proposal = Proposal {
             id: proposal_id,
             proposal_type,
@@ -1337,6 +1653,7 @@ impl AhjoorContract {
             deadline,
             status: ProposalStatus::Pending,
             execution_data,
+            required_quorum,
         };
 
         let mut proposals: Map<u32, Proposal> = env
@@ -1505,13 +1822,7 @@ impl AhjoorContract {
         }
 
         let total_votes = proposal.votes_for + proposal.votes_against;
-        let quorum_percentage: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::QuorumPercentage)
-            .unwrap_or(51);
-
-        let required_votes = ((members.len() as u32 * quorum_percentage) + 99) / 100;
+        let required_votes = ((members.len() as u32 * proposal.required_quorum) + 9999) / 10000;
 
         if total_votes < required_votes {
             proposal.status = ProposalStatus::Rejected;
@@ -1574,6 +1885,44 @@ impl AhjoorContract {
             proposal.proposal_type as u32,
             proposal.target_member.clone(),
         );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    pub fn set_quorum_per_type(
+        env: Env,
+        admin: Address,
+        proposal_type: ProposalType,
+        quorum_bps: u32,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can set quorum per type");
+        }
+
+        if quorum_bps < 100 || quorum_bps > 10000 {
+            panic!("Quorum must be between 1% and 100%");
+        }
+
+        let mut quorum_config: Map<ProposalType, u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::QuorumConfig)
+            .unwrap_or(Map::new(&env));
+
+        quorum_config.set(proposal_type, quorum_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumConfig, &quorum_config);
+
+        events::emit_quorum_config_updated(&env, proposal_type, quorum_bps);
 
         env.storage()
             .instance()
@@ -2841,4 +3190,6 @@ impl AhjoorContract {
 }
 mod test;
 mod test_new_features;
+mod test_skip;
+mod test_quorum;
 pub use events::*;

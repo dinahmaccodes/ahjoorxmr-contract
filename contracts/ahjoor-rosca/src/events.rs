@@ -175,6 +175,14 @@ pub struct QuorumUpdated {
     pub new_quorum: i128,
 }
 
+/// Event: Quorum configured for a specific proposal type
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct QuorumConfigUpdated {
+    pub proposal_type: crate::ProposalType,
+    pub quorum_bps: u32,
+}
+
 /// Event: Member removed via proposal execution
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -246,6 +254,15 @@ pub struct RoundCompleted {
     pub payout_amount: i128,
 }
 
+/// Event: Member requested to skip a round
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct RoundSkipRequested {
+    pub member: Address,
+    pub round: u32,
+    pub fee_paid: i128,
+}
+
 /// Event: Protocol fee collected from round payout
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -304,6 +321,14 @@ pub struct ContractUpgraded {
     pub by_admin: Address,
 }
 
+/// Event: Member contribution tier updated
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MemberTierSet {
+    pub member: Address,
+    pub tier_bps: u32,
+}
+
 // --- Helper Emission Functions ---
 
 /// Event: Round deadline timestamp set
@@ -336,6 +361,10 @@ pub fn emit_round_deadline_timestamp_set(e: &Env, round: u32, timestamp: u64) {
 
 pub fn emit_max_members_upd(e: &Env, old_max: u32, new_max: u32) {
     MaxMembersUpdated { old_max, new_max }.publish(e);
+}
+
+pub fn emit_member_tier_set(e: &Env, member: Address, tier_bps: u32) {
+    MemberTierSet { member, tier_bps }.publish(e);
 }
 
 pub fn emit_contrib(e: &Env, contributor: Address, round: u32, token: Address, amount: i128) {
@@ -486,6 +515,14 @@ pub fn emit_appeal_ok(e: &Env, member: Address) {
 
 pub fn emit_rule_upd(e: &Env, new_quorum: i128) {
     QuorumUpdated { new_quorum }.publish(e);
+}
+
+pub fn emit_quorum_config_updated(e: &Env, proposal_type: crate::ProposalType, quorum_bps: u32) {
+    QuorumConfigUpdated {
+        proposal_type,
+        quorum_bps,
+    }
+    .publish(e);
 }
 
 pub fn emit_mem_del(e: &Env, member: Address) {
@@ -699,4 +736,35 @@ pub fn emit_admin_action_approved(e: &Env, action_id: u32, approved_by: Address,
 
 pub fn emit_admin_action_executed(e: &Env, action_id: u32, action_type: Symbol) {
     AdminActionExecuted { action_id, action_type }.publish(e);
+}
+
+// --- Insurance Pool Events ---
+
+/// Event: Insurance pool top-up contribution
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct InsurancePoolTopUp {
+    pub contributor: Address,
+    pub amount: i128,
+}
+
+/// Event: Insurance pool paid out to cover shortfall
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct InsurancePaidOut {
+    pub round: u32,
+    pub shortfall: i128,
+    pub remaining_pool: i128,
+}
+
+pub fn emit_insurance_top_up(e: &Env, contributor: Address, amount: i128) {
+    InsurancePoolTopUp { contributor, amount }.publish(e);
+}
+
+pub fn emit_insurance_paid_out(e: &Env, round: u32, shortfall: i128, remaining_pool: i128) {
+    InsurancePaidOut { round, shortfall, remaining_pool }.publish(e);
+}
+
+pub fn emit_round_skip_requested(e: &Env, member: Address, round: u32, fee_paid: i128) {
+    RoundSkipRequested { member, round, fee_paid }.publish(e);
 }

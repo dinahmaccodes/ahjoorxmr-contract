@@ -37,12 +37,20 @@ pub(crate) fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
         .get(&DataKey::ExitedMembers)
         .unwrap_or(Vec::new(env));
 
+    let skip_requests: Map<(Address, u32), bool> = env
+        .storage()
+        .instance()
+        .get(&DataKey::SkipRequests)
+        .unwrap_or(Map::new(env));
+
     let mut recipient_idx = (current_round % payout_order.len()) as u32;
     let mut attempts = 0;
     while attempts < payout_order.len() {
         let potential_recipient = payout_order.get(recipient_idx).unwrap();
+        let has_skipped = skip_requests.get((potential_recipient.clone(), current_round)).unwrap_or(false);
         if !suspended_members.contains(&potential_recipient)
             && !exited_members.contains(&potential_recipient)
+            && !has_skipped
         {
             break;
         }
@@ -80,6 +88,65 @@ pub(crate) fn complete_round_payout(env: &Env, _paid_members: &Vec<Address>) {
         .get(&DataKey::FeeRecipient);
 
     let mut total_payout_history_amt = 0i128;
+
+    // Calculate expected pot based on member tiers and check for shortfall
+    let base_amount: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::ContributionAmt)
+        .unwrap_or(0);
+    let tiers: Map<Address, u32> = env
+        .storage()
+        .instance()
+        .get(&DataKey::MemberTiers)
+        .unwrap_or(Map::new(env));
+    let member_contributions: Map<Address, i128> = env
+        .storage()
+        .instance()
+        .get(&DataKey::MemberContributions)
+        .unwrap_or(Map::new(env));
+
+    let mut expected_pot: i128 = 0;
+    for member in paid_members.iter() {
+        let tier_bps = tiers.get(member.clone()).unwrap_or(10_000);
+        let member_expected = (base_amount * tier_bps as i128) / 10_000;
+        expected_pot += member_expected;
+    }
+
+    // Calculate actual pot (excluding reward_pool for base token)
+    let mut actual_pot: i128 = 0;
+    for token_addr in approved_tokens.iter() {
+        let client = token::Client::new(env, &token_addr);
+        let mut balance = client.balance(&env.current_contract_address());
+
+        if token_addr == base_token {
+            balance -= reward_pool;
+            actual_pot = balance;
+        }
+    }
+
+    // Draw from insurance pool if there's a shortfall
+    let mut insurance_pool: i128 = env
+        .storage()
+        .instance()
+        .get(&DataKey::InsurancePool)
+        .unwrap_or(0);
+    let shortfall = expected_pot - actual_pot;
+    if shortfall > 0 && insurance_pool > 0 {
+        let draw_amount = if insurance_pool >= shortfall {
+            shortfall
+        } else {
+            insurance_pool
+        };
+        insurance_pool -= draw_amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::InsurancePool, &insurance_pool);
+        events::emit_insurance_paid_out(env, current_round, draw_amount, insurance_pool);
+
+        // Top up the actual pot with the drawn amount (add to base token balance tracking)
+        actual_pot += draw_amount;
+    }
 
     for token_addr in approved_tokens.iter() {
         let client = token::Client::new(env, &token_addr);
