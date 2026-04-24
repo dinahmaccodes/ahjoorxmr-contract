@@ -3882,3 +3882,30 @@ fn test_scheduled_payment_cancel_before_execution_refunds() {
     assert_eq!(s.token_client.balance(&customer), 5000);
     assert_eq!(s.client.get_payment(&pid).status, PaymentStatus::Refunded);
 }
+
+#[test]
+#[should_panic(expected = "Scheduled payment is ready to execute")]
+fn test_scheduled_payment_cannot_cancel_after_ready() {
+    let s = setup();
+    s.init();
+
+    s.env.ledger().set_timestamp(1_000);
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &5000);
+
+    let pid = s.client.create_payment_with_options(
+        &customer,
+        &merchant,
+        &300,
+        &s.token_addr,
+        &None,
+        &None,
+        &None,
+        &Some(2_000u64),
+        &None,
+    );
+
+    s.env.ledger().set_timestamp(2_000);
+    s.client.cancel_scheduled_payment(&customer, &pid);
+}
