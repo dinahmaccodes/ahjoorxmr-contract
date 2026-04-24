@@ -3622,6 +3622,40 @@ fn test_split_recipients_three_way_with_dust_to_merchant() {
     assert_eq!(s.token_client.balance(&merchant), 2);
 }
 
+#[test]
+fn test_split_completion_emits_events() {
+    let s = setup();
+    s.init();
+
+    let customer = Address::generate(&s.env);
+    let merchant = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+    s.token_admin_client.mint(&customer, &2000);
+
+    let splits = vec![
+        &s.env,
+        SplitRecipient {
+            recipient,
+            bps: 10_000,
+        },
+    ];
+
+    let pid = s.client.create_payment_with_options(
+        &customer,
+        &merchant,
+        &500,
+        &s.token_addr,
+        &None,
+        &None,
+        &Some(splits),
+        &None,
+        &None,
+    );
+    s.client.complete_payment(&pid);
+
+    assert!(s.env.events().all().len() > 0);
+}
+
 // ===========================================================================
 //  Tiered Fee Tests
 // ===========================================================================
@@ -3731,6 +3765,30 @@ fn test_tiered_fee_rolling_volume_rolls_off() {
     // Advance beyond the 4-week rolling window.
     s.env.ledger().set_sequence_number(120_960 * 6);
     assert_eq!(s.client.get_merchant_fee_tier(&merchant), 300);
+}
+
+#[test]
+fn test_get_fee_tiers_roundtrip() {
+    let s = setup();
+    s.init_with_fee(300);
+
+    let tiers = vec![
+        &s.env,
+        FeeTier {
+            min_volume: 2_000,
+            fee_bps: 250,
+        },
+        FeeTier {
+            min_volume: 10_000,
+            fee_bps: 150,
+        },
+    ];
+    s.client.update_fee_tiers(&s.admin, &tiers);
+
+    let got = s.client.get_fee_tiers();
+    assert_eq!(got.len(), 2);
+    assert_eq!(got.get(0).unwrap().min_volume, 2_000);
+    assert_eq!(got.get(1).unwrap().fee_bps, 150);
 }
 
 // ===========================================================================
