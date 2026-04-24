@@ -1,9 +1,9 @@
 #![no_std]
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Bytes, BytesN,
-    Env, Map, String, Vec,
-};
 use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Bytes,
+    BytesN, Env, Map, String, Vec,
+};
 
 /// Maximum length (bytes) for the optional payment reference string.
 const MAX_REFERENCE_LEN: u32 = 64;
@@ -86,6 +86,29 @@ pub enum PaymentStatus {
     Refunded = 2,
     Disputed = 3,
     Expired = 4,
+    ScheduledPending = 5,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitRecipient {
+    pub recipient: Address,
+    pub bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SplitTransfer {
+    pub recipient: Address,
+    pub bps: u32,
+    pub amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeTier {
+    pub min_volume: i128,
+    pub fee_bps: u32,
 }
 
 #[contracttype]
@@ -106,6 +129,10 @@ pub struct Payment {
     pub reference: Option<String>,
     /// Optional key-value metadata (max 5 keys, each max 32 bytes).
     pub metadata: Option<Map<String, String>>,
+    /// Optional recipient split definitions (must sum to 10,000 bps).
+    pub split_recipients: Option<Vec<SplitRecipient>>,
+    /// Optional execution timestamp for scheduled payments. 0 = immediate.
+    pub execute_after: u64,
 }
 
 #[contracttype]
@@ -225,6 +252,8 @@ pub enum DataKey {
     FeeBps,
     /// Address that receives protocol fees
     FeeRecipient,
+    /// Volume-based fee tiers sorted by min_volume ascending.
+    FeeTiers,
     // --- Persistent ---
     Payment(u32),
     CustomerPayments(Address),
@@ -248,6 +277,10 @@ pub enum DataKey {
     MerchantStats(Address),
     /// Persistent: weekly volume bucket — (token, bucket_id) → total completed volume (#70)
     VolumeBucket(Address, u32),
+    /// Persistent: per-merchant weekly volume bucket for rolling tier evaluation.
+    MerchantVolumeBucket(Address, u32),
+    /// Persistent: cached last tier bps emitted for merchant.
+    MerchantCurrentTierBps(Address),
     // --- Temporary ---
     Dispute(u32),
     /// Temporary: idempotency key → payment_id mapping (expires after 24h)
@@ -300,6 +333,9 @@ impl AhjoorPaymentsContract {
         env.storage()
             .instance()
             .set(&DataKey::FeeRecipient, &fee_recipient);
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeTiers, &Vec::<FeeTier>::new(&env));
 
         env.storage()
             .instance()
@@ -321,6 +357,34 @@ impl AhjoorPaymentsContract {
         token: Address,
         reference: Option<String>,
         metadata: Option<Map<String, String>>,
+        idempotency_key: Option<BytesN<32>>,
+    ) -> u32 {
+        Self::create_payment_with_options(
+            env,
+            customer,
+            merchant,
+            amount,
+            token,
+            reference,
+            metadata,
+            None,
+            None,
+            idempotency_key,
+        )
+    }
+
+    /// Extended payment creation with optional recipient splits and scheduling.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_payment_with_options(
+        env: Env,
+        customer: Address,
+        merchant: Address,
+        amount: i128,
+        token: Address,
+        reference: Option<String>,
+        metadata: Option<Map<String, String>>,
+        split_recipients: Option<Vec<SplitRecipient>>,
+        execute_after: Option<u64>,
         idempotency_key: Option<BytesN<32>>,
     ) -> u32 {
         Self::require_not_paused(&env);
@@ -347,6 +411,7 @@ impl AhjoorPaymentsContract {
         // Validate optional reference and metadata (#67)
         Self::validate_reference(&env, &reference);
         Self::validate_metadata(&env, &metadata);
+        Self::validate_split_recipients(&split_recipients);
 
         // Merchant allowlist check (#58)
         Self::require_merchant_approved(&env, &merchant);
@@ -360,6 +425,12 @@ impl AhjoorPaymentsContract {
             .get(&DataKey::PaymentTimeout)
             .unwrap_or(DEFAULT_PAYMENT_TIMEOUT);
         let now = env.ledger().timestamp();
+        let execute_after_ts = execute_after.unwrap_or(0);
+        let status = if execute_after_ts > now {
+            PaymentStatus::ScheduledPending
+        } else {
+            PaymentStatus::Pending
+        };
 
         let payment_id = Self::next_payment_id(&env);
         let payment = Payment {
@@ -368,12 +439,14 @@ impl AhjoorPaymentsContract {
             merchant: merchant.clone(),
             amount,
             token: token.clone(),
-            status: PaymentStatus::Pending,
+            status,
             created_at: now,
             expires_at: now + timeout,
             refunded_amount: 0,
             reference: reference.clone(),
             metadata,
+            split_recipients,
+            execute_after: execute_after_ts,
         };
 
         // Persistent: per-payment record with individual TTL
@@ -410,6 +483,9 @@ impl AhjoorPaymentsContract {
         Self::inc_merchant_created(&env, &merchant);
 
         events::emit_payment_created(&env, payment_id, customer, merchant, amount, token);
+        if execute_after_ts > now {
+            events::emit_payment_scheduled(&env, payment_id, execute_after_ts);
+        }
 
         env.storage()
             .instance()
@@ -479,6 +555,8 @@ impl AhjoorPaymentsContract {
                 refunded_amount: 0,
                 reference: request.reference.clone(),
                 metadata: request.metadata.clone(),
+                split_recipients: None,
+                execute_after: 0,
             };
 
             // Persistent: per-payment record with individual TTL
@@ -524,9 +602,7 @@ impl AhjoorPaymentsContract {
         payment_ids
     }
 
-    /// Admin marks a payment as completed and ready for merchant settlement.
-    /// Deducts protocol fee from payment amount.
-    /// Fee is transferred to fee_recipient, remaining amount stays in escrow for merchant.
+    /// Admin completes an immediate payment.
     pub fn complete_payment(env: Env, payment_id: u32) {
         Self::require_not_paused(&env);
         let admin: Address = env
@@ -536,61 +612,46 @@ impl AhjoorPaymentsContract {
             .expect("Not initialized");
         admin.require_auth();
 
+        Self::complete_payment_internal(&env, payment_id, false);
+    }
+
+    /// Execute a scheduled payment once execute_after has passed. Callable by anyone.
+    pub fn execute_scheduled_payment(env: Env, payment_id: u32) {
+        Self::require_not_paused(&env);
+        Self::complete_payment_internal(&env, payment_id, true);
+        events::emit_scheduled_payment_executed(&env, payment_id);
+    }
+
+    /// Customer can cancel a scheduled payment before execution and get refunded.
+    pub fn cancel_scheduled_payment(env: Env, customer: Address, payment_id: u32) {
+        Self::require_not_paused(&env);
+        customer.require_auth();
+
         let mut payment: Payment = env
             .storage()
             .persistent()
             .get(&DataKey::Payment(payment_id))
             .expect("Payment not found");
 
-        if payment.status != PaymentStatus::Pending {
-            panic!("Payment is not pending");
+        if payment.customer != customer {
+            panic!("Only payment customer can cancel scheduled payment");
+        }
+        if payment.status != PaymentStatus::ScheduledPending {
+            panic!("Payment is not scheduled");
+        }
+        if env.ledger().timestamp() >= payment.execute_after {
+            panic!("Scheduled payment is ready to execute");
         }
 
-        // Reject if payment has expired (#54)
-        if payment.expires_at > 0 && env.ledger().timestamp() >= payment.expires_at {
-            panic!("Payment has expired");
-        }
-
-        // Calculate and deduct protocol fee
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeBps)
-            .unwrap_or(DEFAULT_FEE_BPS);
-        let fee_recipient: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeRecipient)
-            .expect("Fee recipient not configured");
-
-        let fee_amount = (payment.amount * fee_bps as i128) / 10_000;
-        let merchant_amount = payment.amount - fee_amount;
-
-        // Transfer fee to fee_recipient if fee > 0
-        if fee_amount > 0 {
-            let client = token::Client::new(&env, &payment.token);
-            client.transfer(
-                &env.current_contract_address(),
-                &fee_recipient,
-                &fee_amount,
-            );
-
-            events::emit_fee_collected(
-                &env,
-                payment_id,
-                fee_amount,
-                fee_recipient.clone(),
-                payment.token.clone(),
-            );
-        }
+        let client = token::Client::new(&env, &payment.token);
+        client.transfer(
+            &env.current_contract_address(),
+            &payment.customer,
+            &payment.amount,
+        );
 
         let old_status = payment.status;
-        payment.status = PaymentStatus::Completed;
-        // Update payment amount to reflect merchant's net amount after fee
-        payment.amount = merchant_amount;
-        let completed_at = env.ledger().timestamp();
-
-        // Extend TTL on update so completed records survive long-term
+        payment.status = PaymentStatus::Refunded;
         env.storage()
             .persistent()
             .set(&DataKey::Payment(payment_id), &payment);
@@ -599,53 +660,10 @@ impl AhjoorPaymentsContract {
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
-        env.storage()
-            .persistent()
-            .set(&DataKey::Settled(payment_id), &false);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Settled(payment_id),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
 
-        // Compute and store receipt hash (#65)
-        // sha256(payment_id || customer || merchant || amount || token || completed_at)
-        let receipt_hash = Self::compute_receipt_hash(
-            &env,
-            payment_id,
-            &payment.customer,
-            &payment.merchant,
-            merchant_amount,
-            &payment.token,
-            completed_at,
-        );
-        env.storage()
-            .persistent()
-            .set(&DataKey::PaymentReceipt(payment_id), &receipt_hash);
-        env.storage().persistent().extend_ttl(
-            &DataKey::PaymentReceipt(payment_id),
-            PERSISTENT_LIFETIME_THRESHOLD,
-            PERSISTENT_BUMP_AMOUNT,
-        );
-
-        events::emit_payment_completed(
-            &env,
-            payment_id,
-            payment.merchant.clone(),
-            merchant_amount,
-            completed_at,
-        );
-        events::emit_payment_status_changed(&env, payment_id, old_status, PaymentStatus::Completed);
-        events::emit_payment_receipt_issued(&env, payment_id, receipt_hash);
-
-        // Update stats (#70) - use merchant_amount for volume tracking
-        Self::inc_global_completed(&env, &payment.token, merchant_amount);
-        Self::inc_merchant_completed(&env, &payment.merchant, &payment.token, merchant_amount);
-        Self::inc_volume_bucket(&env, &payment.token, merchant_amount);
-
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::inc_global_refunded(&env, &payment.token, payment.amount);
+        Self::inc_merchant_refunded(&env, &payment.merchant, &payment.token, payment.amount);
+        events::emit_payment_status_changed(&env, payment_id, old_status, PaymentStatus::Refunded);
     }
 
     /// Settle a merchant batch in one transfer.
@@ -1016,6 +1034,8 @@ impl AhjoorPaymentsContract {
                 refunded_amount: 0,
                 reference: None,
                 metadata: None,
+                split_recipients: None,
+                execute_after: 0,
             };
 
             env.storage()
@@ -1127,6 +1147,8 @@ impl AhjoorPaymentsContract {
             refunded_amount: 0,
             reference: None,
             metadata: None,
+            split_recipients: None,
+            execute_after: 0,
         };
 
         env.storage()
@@ -1274,6 +1296,38 @@ impl AhjoorPaymentsContract {
             .instance()
             .get(&DataKey::FeeRecipient)
             .expect("Fee recipient not configured")
+    }
+
+    /// Admin updates the ascending fee tier table.
+    pub fn update_fee_tiers(env: Env, admin: Address, tiers: Vec<FeeTier>) {
+        Self::require_not_paused(&env);
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        if admin != stored_admin {
+            panic!("Only admin can update fee tiers");
+        }
+
+        Self::validate_fee_tiers(&tiers);
+        env.storage().instance().set(&DataKey::FeeTiers, &tiers);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    pub fn get_fee_tiers(env: Env) -> Vec<FeeTier> {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or(Vec::new(&env))
+    }
+
+    pub fn get_merchant_fee_tier(env: Env, merchant: Address) -> u32 {
+        let volume = Self::rolling_merchant_volume(&env, &merchant);
+        Self::fee_bps_for_volume(&env, volume)
     }
 
     /// Admin updates global per-customer payment rate limit settings.
@@ -1998,6 +2052,266 @@ impl AhjoorPaymentsContract {
         }
     }
 
+    fn complete_payment_internal(env: &Env, payment_id: u32, scheduled_only: bool) {
+        let mut payment: Payment = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Payment(payment_id))
+            .expect("Payment not found");
+
+        if scheduled_only {
+            if payment.status != PaymentStatus::ScheduledPending {
+                panic!("Payment is not scheduled");
+            }
+            if env.ledger().timestamp() < payment.execute_after {
+                panic!("Payment cannot execute before schedule");
+            }
+        } else if payment.status != PaymentStatus::Pending {
+            panic!("Payment is not pending");
+        }
+
+        if payment.expires_at > 0 && env.ledger().timestamp() >= payment.expires_at {
+            panic!("Payment has expired");
+        }
+
+        let rolling_before = Self::rolling_merchant_volume(env, &payment.merchant);
+        let projected_volume = rolling_before + payment.amount;
+        let applied_fee_bps = Self::fee_bps_for_volume(env, projected_volume);
+        let fee_amount = (payment.amount * applied_fee_bps as i128) / 10_000;
+        let net_amount = payment.amount - fee_amount;
+
+        let fee_recipient: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeRecipient)
+            .expect("Fee recipient not configured");
+
+        let token_client = token::Client::new(env, &payment.token);
+
+        if fee_amount > 0 {
+            token_client.transfer(&env.current_contract_address(), &fee_recipient, &fee_amount);
+            events::emit_fee_collected(
+                env,
+                payment_id,
+                fee_amount,
+                fee_recipient,
+                payment.token.clone(),
+            );
+        }
+
+        let split_transfers = Self::distribute_net_payment(env, &payment, net_amount);
+        if split_transfers.len() > 0 {
+            events::emit_payment_split_completed(env, payment_id, split_transfers);
+        }
+
+        let old_status = payment.status;
+        payment.status = PaymentStatus::Completed;
+        payment.amount = net_amount;
+        let completed_at = env.ledger().timestamp();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Payment(payment_id), &payment);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Payment(payment_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::Settled(payment_id), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Settled(payment_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        let receipt_hash = Self::compute_receipt_hash(
+            env,
+            payment_id,
+            &payment.customer,
+            &payment.merchant,
+            net_amount,
+            &payment.token,
+            completed_at,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::PaymentReceipt(payment_id), &receipt_hash);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PaymentReceipt(payment_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        Self::inc_global_completed(env, &payment.token, net_amount);
+        Self::inc_merchant_completed(env, &payment.merchant, &payment.token, net_amount);
+        Self::inc_volume_bucket(env, &payment.token, net_amount);
+        Self::inc_merchant_volume_bucket(env, &payment.merchant, payment.amount + fee_amount);
+
+        let rolling_after = Self::rolling_merchant_volume(env, &payment.merchant);
+        let new_tier_bps = Self::fee_bps_for_volume(env, rolling_after);
+        let tier_key = DataKey::MerchantCurrentTierBps(payment.merchant.clone());
+        let old_tier_bps: u32 = env
+            .storage()
+            .persistent()
+            .get(&tier_key)
+            .unwrap_or(Self::get_fee_bps(env.clone()));
+        if old_tier_bps != new_tier_bps {
+            env.storage().persistent().set(&tier_key, &new_tier_bps);
+            env.storage().persistent().extend_ttl(
+                &tier_key,
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+            events::emit_merchant_tier_updated(
+                env,
+                payment.merchant.clone(),
+                new_tier_bps,
+                rolling_after,
+            );
+        }
+
+        events::emit_payment_completed(
+            env,
+            payment_id,
+            payment.merchant.clone(),
+            net_amount,
+            completed_at,
+        );
+        events::emit_payment_status_changed(env, payment_id, old_status, PaymentStatus::Completed);
+        events::emit_payment_receipt_issued(env, payment_id, receipt_hash);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    fn distribute_net_payment(
+        env: &Env,
+        payment: &Payment,
+        net_amount: i128,
+    ) -> Vec<SplitTransfer> {
+        let token_client = token::Client::new(env, &payment.token);
+
+        if let Some(splits) = &payment.split_recipients {
+            if splits.len() == 0 {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &payment.merchant,
+                    &net_amount,
+                );
+                return Vec::new(env);
+            }
+
+            let mut split_events = Vec::new(env);
+            let mut distributed: i128 = 0;
+            for split in splits.iter() {
+                let share = (net_amount * split.bps as i128) / 10_000;
+                if share > 0 {
+                    token_client.transfer(
+                        &env.current_contract_address(),
+                        &split.recipient,
+                        &share,
+                    );
+                }
+                distributed += share;
+                split_events.push_back(SplitTransfer {
+                    recipient: split.recipient,
+                    bps: split.bps,
+                    amount: share,
+                });
+            }
+
+            let dust_to_merchant = net_amount - distributed;
+            if dust_to_merchant > 0 {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &payment.merchant,
+                    &dust_to_merchant,
+                );
+            }
+            return split_events;
+        }
+
+        token_client.transfer(
+            &env.current_contract_address(),
+            &payment.merchant,
+            &net_amount,
+        );
+        Vec::new(env)
+    }
+
+    fn validate_split_recipients(split_recipients: &Option<Vec<SplitRecipient>>) {
+        if let Some(splits) = split_recipients {
+            if splits.len() == 0 {
+                panic!("split_recipients cannot be empty");
+            }
+
+            let mut total_bps: u32 = 0;
+            for split in splits.iter() {
+                if split.bps == 0 {
+                    panic!("split recipient bps must be positive");
+                }
+                total_bps = total_bps
+                    .checked_add(split.bps)
+                    .expect("split bps overflow");
+            }
+            if total_bps != 10_000 {
+                panic!("split_recipients must sum to 10000 bps");
+            }
+        }
+    }
+
+    fn validate_fee_tiers(tiers: &Vec<FeeTier>) {
+        let mut last_min_volume: i128 = -1;
+        for tier in tiers.iter() {
+            if tier.fee_bps > MAX_FEE_BPS {
+                panic!("tier fee cannot exceed 500 bps (5%)");
+            }
+            if tier.min_volume < 0 {
+                panic!("tier min_volume cannot be negative");
+            }
+            if tier.min_volume <= last_min_volume {
+                panic!("fee tiers must be strictly ascending by min_volume");
+            }
+            last_min_volume = tier.min_volume;
+        }
+    }
+
+    fn fee_bps_for_volume(env: &Env, volume: i128) -> u32 {
+        let default_fee: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .unwrap_or(DEFAULT_FEE_BPS);
+        let tiers: Vec<FeeTier> = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or(Vec::new(env));
+
+        let mut selected = default_fee;
+        for tier in tiers.iter() {
+            if volume >= tier.min_volume {
+                selected = tier.fee_bps;
+            }
+        }
+        selected
+    }
+
+    fn rolling_merchant_volume(env: &Env, merchant: &Address) -> i128 {
+        let current_bucket = env.ledger().sequence() / LEDGER_BUCKET_SIZE;
+        let mut total = 0i128;
+        for i in 0..4u32 {
+            let bucket = current_bucket.saturating_sub(i);
+            let key = DataKey::MerchantVolumeBucket(merchant.clone(), bucket);
+            let bucket_total: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+            total += bucket_total;
+        }
+        total
+    }
+
     fn enforce_rate_limit(env: &Env, customer: &Address, requested_payments: u32) {
         if requested_payments == 0 {
             return;
@@ -2237,6 +2551,18 @@ impl AhjoorPaymentsContract {
     fn inc_volume_bucket(env: &Env, token: &Address, amount: i128) {
         let bucket = env.ledger().sequence() / LEDGER_BUCKET_SIZE;
         let key = DataKey::VolumeBucket(token.clone(), bucket);
+        let prev: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        env.storage().persistent().set(&key, &(prev + amount));
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+
+    fn inc_merchant_volume_bucket(env: &Env, merchant: &Address, amount: i128) {
+        let bucket = env.ledger().sequence() / LEDGER_BUCKET_SIZE;
+        let key = DataKey::MerchantVolumeBucket(merchant.clone(), bucket);
         let prev: i128 = env.storage().persistent().get(&key).unwrap_or(0);
         env.storage().persistent().set(&key, &(prev + amount));
         env.storage().persistent().extend_ttl(

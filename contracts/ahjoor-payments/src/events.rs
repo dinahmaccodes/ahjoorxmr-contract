@@ -1,5 +1,5 @@
-use crate::PaymentStatus;
-use soroban_sdk::{contractevent, Address, BytesN, Env, String};
+use crate::{PaymentStatus, SplitTransfer};
+use soroban_sdk::{contractevent, Address, BytesN, Env, String, Vec};
 
 /// Event: Payment receipt issued on completion (#65)
 #[contractevent]
@@ -17,6 +17,38 @@ pub struct FeeCollected {
     pub fee_amount: i128,
     pub fee_recipient: Address,
     pub token: Address,
+}
+
+/// Event: Payment split distribution completed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PaymentSplitCompleted {
+    pub payment_id: u32,
+    pub splits: Vec<SplitTransfer>,
+}
+
+/// Event: Scheduled payment created
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct PaymentScheduled {
+    pub payment_id: u32,
+    pub execute_after: u64,
+}
+
+/// Event: Scheduled payment executed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct ScheduledPaymentExecuted {
+    pub payment_id: u32,
+}
+
+/// Event: Merchant fee tier updated based on rolling 30-day volume
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct MerchantTierUpdated {
+    pub merchant: Address,
+    pub new_tier_bps: u32,
+    pub volume: i128,
 }
 
 /// Event: Multi-token payment created (customer paid in non-USDC token)
@@ -416,6 +448,31 @@ pub fn emit_fee_collected(
         fee_amount,
         fee_recipient,
         token,
+    }
+    .publish(e);
+}
+
+pub fn emit_payment_split_completed(e: &Env, payment_id: u32, splits: Vec<SplitTransfer>) {
+    PaymentSplitCompleted { payment_id, splits }.publish(e);
+}
+
+pub fn emit_payment_scheduled(e: &Env, payment_id: u32, execute_after: u64) {
+    PaymentScheduled {
+        payment_id,
+        execute_after,
+    }
+    .publish(e);
+}
+
+pub fn emit_scheduled_payment_executed(e: &Env, payment_id: u32) {
+    ScheduledPaymentExecuted { payment_id }.publish(e);
+}
+
+pub fn emit_merchant_tier_updated(e: &Env, merchant: Address, new_tier_bps: u32, volume: i128) {
+    MerchantTierUpdated {
+        merchant,
+        new_tier_bps,
+        volume,
     }
     .publish(e);
 }
