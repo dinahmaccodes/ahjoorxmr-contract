@@ -33,6 +33,8 @@ pub struct RoscaConfig {
     pub use_timestamp_schedule: bool,
     pub round_duration_seconds: u64,
     pub max_members: Option<u32>,
+    pub skip_fee: i128,
+    pub max_skips_per_cycle: u32,
 }
 
 #[contracttype]
@@ -112,6 +114,7 @@ pub struct Proposal {
     pub deadline: u64,
     pub status: ProposalStatus,
     pub execution_data: Option<i128>,
+    pub required_quorum: u32, // bps (e.g. 5100 = 51%)
 }
 
 /// Storage key classification:
@@ -185,6 +188,14 @@ pub enum DataKey {
     RoundDurationSeconds,   // u64
     RoundDeadlineTimestamp, // u64
     MaxMembers,             // u32
+    MemberTiers,            // Map<Address, u32> — multiplier in bps (e.g., 10000 = 1x)
+    InsurancePool,           // i128 — pool balance for defaulter coverage
+    InsuranceContributionBps, // u32 — auto-deduction bps from each contribution (optional)
+    SkipFee,                 // i128
+    MaxSkipsPerCycle,        // u32
+    SkipRequests,            // Map<(Address, u32), bool>
+    MemberSkips,             // Map<(Address, u32), u32> (Address, Cycle) -> Count
+    QuorumConfig,            // Map<ProposalType, u32> (Type -> Quorum Bps)
     // --- Persistent ---
     RoundHistory, // Vec<PayoutRecord> — grows every round
     // --- Temporary ---
