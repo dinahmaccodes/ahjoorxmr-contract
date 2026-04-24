@@ -1,13 +1,5 @@
 use soroban_sdk::{contractevent, Address, Env, String};
 
-/// Event: Partial refund cap applied (remaining refundable < 10%)
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct PartialRefundCapApplied {
-    pub refund_id: u32,
-    pub remaining_refundable: i128,
-}
-
 /// Event: Refund reason code recorded (#157)
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -178,6 +170,44 @@ pub struct BulkRefundProcessed {
     pub total_amount: i128,
 }
 
+// --- Issue #166: Per-Customer Refund Request Cooldown Period ---
+
+/// Event: Customer attempted a refund request within the cooldown window
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct RefundCooldownActive {
+    pub customer: Address,
+    pub next_eligible_at: u64,
+}
+
+// --- Issue #167: Delegated Refund Approval for Merchant Sub-Admins ---
+
+/// Event: A delegate was added for a merchant
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DelegateAdded {
+    pub merchant: Address,
+    pub delegate: Address,
+}
+
+/// Event: A refund was approved by a merchant delegate
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct RefundApprovedByDelegate {
+    pub refund_id: u32,
+    pub delegate: Address,
+}
+
+// --- Issue #168: Refund Request Expiry with Auto-Cancellation ---
+
+/// Event: A refund request was cancelled (by customer or auto-cancelled)
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct RefundRequestCancelled {
+    pub refund_id: u32,
+    pub cancelled_by: Address,
+}
+
 // --- Helper Emission Functions ---
 
 pub fn emit_refund_requested(
@@ -247,6 +277,7 @@ pub fn emit_contract_upgraded(e: &Env, old_version: u32, new_version: u32, by_ad
     }
     .publish(e);
 }
+
 pub fn emit_refund_auto_approved(e: &Env, refund_id: u32, customer: Address, amount: i128) {
     RefundAutoApproved {
         refund_id,
@@ -277,7 +308,12 @@ pub fn emit_contract_resumed(e: &Env, admin: Address, timestamp: u64) {
     ContractResumed { admin, timestamp }.publish(e);
 }
 
-pub fn emit_refund_auto_approved_whitelist(e: &Env, refund_id: u32, merchant: Address, amount: i128) {
+pub fn emit_refund_auto_approved_whitelist(
+    e: &Env,
+    refund_id: u32,
+    merchant: Address,
+    amount: i128,
+) {
     RefundAutoApprovedWhitelist {
         refund_id,
         merchant,
@@ -322,6 +358,10 @@ pub fn emit_refund_auto_rejected(e: &Env, refund_id: u32, elapsed_seconds: u64) 
     RefundAutoRejected {
         refund_id,
         elapsed_seconds,
+    }
+    .publish(e);
+}
+
 pub fn emit_refund_tier_applied(
     e: &Env,
     refund_id: u32,
@@ -360,6 +400,42 @@ pub fn emit_appeal_resolved(e: &Env, refund_id: u32, approved: bool) {
         approved,
     }
     .publish(e);
+}
+
 pub fn emit_bulk_refund_processed(e: &Env, count: u32, total_amount: i128) {
     BulkRefundProcessed { count, total_amount }.publish(e);
+}
+
+pub fn emit_refund_appealed(e: &Env, refund_id: u32, customer: Address) {
+    RefundAppealed { refund_id, customer }.publish(e);
+}
+
+// --- #166 ---
+
+pub fn emit_refund_cooldown_active(e: &Env, customer: Address, next_eligible_at: u64) {
+    RefundCooldownActive {
+        customer,
+        next_eligible_at,
+    }
+    .publish(e);
+}
+
+// --- #167 ---
+
+pub fn emit_delegate_added(e: &Env, merchant: Address, delegate: Address) {
+    DelegateAdded { merchant, delegate }.publish(e);
+}
+
+pub fn emit_refund_approved_by_delegate(e: &Env, refund_id: u32, delegate: Address) {
+    RefundApprovedByDelegate { refund_id, delegate }.publish(e);
+}
+
+// --- #168 ---
+
+pub fn emit_refund_request_cancelled(e: &Env, refund_id: u32, cancelled_by: Address) {
+    RefundRequestCancelled {
+        refund_id,
+        cancelled_by,
+    }
+    .publish(e);
 }

@@ -42,6 +42,8 @@ pub struct Escrow {
     pub renewal_count: u32,
     pub renewals_remaining: u32,
     pub dispute_timeout_seconds: Option<u64>,
+    /// Seconds of buyer inactivity before seller can claim auto-release; 0 = disabled (#150)
+    pub buyer_inactivity_release_seconds: u64,
 }
 
 #[contracttype]
@@ -126,6 +128,8 @@ pub enum DataKey {
     Evidence(u32, Address),
     RenewalAllowance(u32),
     DefaultDisputeTimeout,
+    /// Last timestamp of any buyer action for inactivity tracking (#150)
+    LastBuyerAction(u32),
 }
 
 const MAX_PROTOCOL_FEE_BPS: u32 = 200; // 2%
@@ -170,6 +174,7 @@ impl AhjoorEscrowContract {
         sellers: Vec<(Address, u32)>,
         auto_renew: bool,
         renewal_count: u32,
+        buyer_inactivity_release_seconds: u64,
     ) -> u32 {
         Self::require_not_paused(&env);
         buyer.require_auth();
@@ -186,6 +191,7 @@ impl AhjoorEscrowContract {
             sellers,
             auto_renew,
             renewal_count,
+            buyer_inactivity_release_seconds,
         )
     }
 
@@ -224,6 +230,7 @@ impl AhjoorEscrowContract {
                 cfg.sellers,
                 cfg.auto_renew,
                 cfg.renewal_count,
+                0, // buyer_inactivity_release_seconds not supported in batch config
             );
 
             if first_id.is_none() {
@@ -255,6 +262,7 @@ impl AhjoorEscrowContract {
         sellers: Vec<(Address, u32)>,
         auto_renew: bool,
         renewal_count: u32,
+        buyer_inactivity_release_seconds: u64,
     ) -> u32 {
         if amount <= 0 {
             panic!("Escrow amount must be positive");
@@ -307,6 +315,8 @@ impl AhjoorEscrowContract {
             resolved_sellers.get(0).unwrap().0
         };
 
+        let now = env.ledger().timestamp();
+
         let escrow = Escrow {
             id: escrow_id,
             buyer: buyer.clone(),
@@ -315,7 +325,7 @@ impl AhjoorEscrowContract {
             amount,
             token: token.clone(),
             status: EscrowStatus::Active,
-            created_at: env.ledger().timestamp(),
+            created_at: now,
             deadline,
             metadata_hash: metadata_hash.clone(),
             sellers: resolved_sellers.clone(),
@@ -327,6 +337,7 @@ impl AhjoorEscrowContract {
                 renewal_count
             },
             dispute_timeout_seconds: None,
+            buyer_inactivity_release_seconds,
         };
 
         env.storage()
@@ -337,6 +348,18 @@ impl AhjoorEscrowContract {
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
+
+        // #150: Initialize LastBuyerAction to creation timestamp
+        if buyer_inactivity_release_seconds > 0 {
+            env.storage()
+                .persistent()
+                .set(&DataKey::LastBuyerAction(escrow_id), &now);
+            env.storage().persistent().extend_ttl(
+                &DataKey::LastBuyerAction(escrow_id),
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
 
         // Store metadata separately with timestamp if provided
         if let Some(ref hash) = metadata_hash {
@@ -407,6 +430,7 @@ impl AhjoorEscrowContract {
             sellers,
             auto_renew,
             renewal_count,
+            0, // buyer_inactivity_release_seconds; use create_escrow directly if needed
         );
 
         let mut escrow: Escrow = env
@@ -447,6 +471,11 @@ impl AhjoorEscrowContract {
 
         if caller != escrow.buyer && caller != escrow.arbiter {
             panic!("Only buyer or arbiter can release escrow");
+        }
+
+        // #150: Track buyer activity
+        if caller == escrow.buyer {
+            Self::update_last_buyer_action(&env, &escrow);
         }
 
         let client = token::Client::new(&env, &escrow.token);
@@ -517,6 +546,11 @@ impl AhjoorEscrowContract {
 
         if party != escrow.buyer && party != escrow.seller {
             panic!("Only buyer or seller can submit evidence");
+        }
+
+        // #150: Track buyer activity
+        if party == escrow.buyer {
+            Self::update_last_buyer_action(&env, &escrow);
         }
 
         let key = DataKey::Evidence(escrow_id, party.clone());
@@ -728,6 +762,11 @@ impl AhjoorEscrowContract {
 
         if dispute_amount <= 0 || dispute_amount > escrow.amount {
             panic!("dispute_amount must be > 0 and <= escrow amount");
+        }
+
+        // #150: Track buyer activity
+        if caller == escrow.buyer {
+            Self::update_last_buyer_action(&env, &escrow);
         }
 
         let released_amount = escrow.amount - dispute_amount;
@@ -1208,6 +1247,11 @@ impl AhjoorEscrowContract {
             panic!("Only buyer or seller can update metadata");
         }
 
+        // #150: Track buyer activity
+        if caller == escrow.buyer {
+            Self::update_last_buyer_action(&env, &escrow);
+        }
+
         escrow.metadata_hash = Some(new_hash.clone());
         env.storage()
             .persistent()
@@ -1493,6 +1537,7 @@ impl AhjoorEscrowContract {
             renewal_count: 0,
             renewals_remaining: 0,
             dispute_timeout_seconds: None,
+            buyer_inactivity_release_seconds: 0,
         };
 
         env.storage()
@@ -1671,6 +1716,7 @@ impl AhjoorEscrowContract {
             renewal_count: 0,
             renewals_remaining: 0,
             dispute_timeout_seconds: None,
+            buyer_inactivity_release_seconds: 0,
         };
 
         env.storage()
@@ -1780,6 +1826,73 @@ impl AhjoorEscrowContract {
             .persistent()
             .get(&DataKey::Template(template_id))
             .expect("Template not found")
+    }
+
+    // -------------------------------------------------------------------------
+    // #150: Seller-Favored Auto-Release on Prolonged Buyer Inactivity
+    // -------------------------------------------------------------------------
+
+    /// Claim an inactivity-based release to seller.
+    /// Callable only by the escrow's seller after `buyer_inactivity_release_seconds`
+    /// have elapsed without any buyer action. Disabled when the field is 0.
+    pub fn claim_inactivity_release(env: Env, seller: Address, escrow_id: u32) {
+        Self::require_not_paused(&env);
+        seller.require_auth();
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .expect("Escrow not found");
+
+        if escrow.buyer_inactivity_release_seconds == 0 {
+            panic!("Inactivity release is not enabled for this escrow");
+        }
+
+        if !Self::is_open_escrow_status(escrow.status) {
+            panic!("Escrow is not active");
+        }
+
+        if seller != escrow.seller {
+            panic!("Only the escrow seller can claim inactivity release");
+        }
+
+        let last_action: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LastBuyerAction(escrow_id))
+            .unwrap_or(escrow.created_at);
+
+        let now = env.ledger().timestamp();
+        let inactivity_seconds = now.saturating_sub(last_action);
+
+        if inactivity_seconds < escrow.buyer_inactivity_release_seconds {
+            panic!("Buyer inactivity window has not elapsed");
+        }
+
+        let client = token::Client::new(&env, &escrow.token);
+        client.transfer(
+            &env.current_contract_address(),
+            &escrow.seller,
+            &escrow.amount,
+        );
+
+        escrow.status = EscrowStatus::Released;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(escrow_id), &escrow);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Escrow(escrow_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_inactivity_release_triggered(&env, escrow_id, seller, inactivity_seconds);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     // --- Internal Helpers ---
@@ -1905,7 +2018,20 @@ impl AhjoorEscrowContract {
             renewal_count: source.renewal_count,
             renewals_remaining,
             dispute_timeout_seconds: source.dispute_timeout_seconds,
+            buyer_inactivity_release_seconds: source.buyer_inactivity_release_seconds,
         };
+
+        // #150: Initialize LastBuyerAction for renewed escrow
+        if source.buyer_inactivity_release_seconds > 0 {
+            env.storage()
+                .persistent()
+                .set(&DataKey::LastBuyerAction(new_escrow_id), &now);
+            env.storage().persistent().extend_ttl(
+                &DataKey::LastBuyerAction(new_escrow_id),
+                PERSISTENT_LIFETIME_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
 
         env.storage()
             .persistent()
@@ -1927,6 +2053,23 @@ impl AhjoorEscrowContract {
         );
 
         events::emit_escrow_auto_renewed(env, old_escrow_id, new_escrow_id, renewals_remaining);
+    }
+
+    /// Update the LastBuyerAction timestamp for inactivity tracking (#150).
+    /// Only records when inactivity release is enabled for the escrow.
+    fn update_last_buyer_action(env: &Env, escrow: &Escrow) {
+        if escrow.buyer_inactivity_release_seconds == 0 {
+            return;
+        }
+        let now = env.ledger().timestamp();
+        env.storage()
+            .persistent()
+            .set(&DataKey::LastBuyerAction(escrow.id), &now);
+        env.storage().persistent().extend_ttl(
+            &DataKey::LastBuyerAction(escrow.id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
 
     fn get_or_init_version(env: &Env) -> u32 {

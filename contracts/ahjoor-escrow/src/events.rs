@@ -526,3 +526,28 @@ pub fn emit_multi_party_escrow_released(e: &Env, escrow_id: u32, total_amount: i
     }
     .publish(e);
 }
+
+// --- Issue #150: Seller-Favored Auto-Release on Prolonged Buyer Inactivity ---
+
+/// Event: Inactivity release claimed by seller after buyer inactivity window
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct InactivityReleaseTriggered {
+    pub escrow_id: u32,
+    pub seller: Address,
+    pub inactivity_seconds: u64,
+}
+
+pub fn emit_inactivity_release_triggered(
+    e: &Env,
+    escrow_id: u32,
+    seller: Address,
+    inactivity_seconds: u64,
+) {
+    InactivityReleaseTriggered {
+        escrow_id,
+        seller,
+        inactivity_seconds,
+    }
+    .publish(e);
+}

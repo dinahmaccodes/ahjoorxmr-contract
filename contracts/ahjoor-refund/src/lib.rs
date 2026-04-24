@@ -55,6 +55,8 @@ pub enum RefundStatus {
     Rejected = 2,
     Processed = 3,
     UnderAppeal = 4,
+    /// Terminal status: refund request was cancelled before approval (#168)
+    Cancelled = 5,
 }
 
 #[contracttype]
@@ -136,6 +138,14 @@ pub enum DataKey {
     PendingRefundQueue,
     /// Tiered refund policy: Vec<(max_seconds_since_payment, refund_bps)>.
     RefundTiers,
+    /// Cooldown period in seconds between customer refund requests (#166)
+    RefundCooldown,
+    /// Last refund request timestamp per customer (#166) — stored in temporary storage
+    LastRefundRequest(Address),
+    /// List of approved delegate addresses per merchant (#167)
+    MerchantDelegates(Address),
+    /// Window in seconds during which a customer can cancel their own request (#168)
+    CustomerCancelWindow,
 }
 
 mod events;
@@ -147,7 +157,8 @@ pub struct AhjoorRefundContract;
 impl AhjoorRefundContract {
     /// Initialize the refund contract with an admin, the payment contract address, a
     /// `dispute_window` (in seconds), optional escrow contract address, refund fee parameters,
-    /// auto-reject window, and appeal window.
+    /// auto-reject window, appeal window, refund tiers, cooldown seconds (#166), and
+    /// customer cancel window (#168).
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -159,6 +170,8 @@ impl AhjoorRefundContract {
         auto_reject_window_seconds: u64,
         appeal_window_seconds: u64,
         refund_tiers: Option<Vec<(u64, u32)>>,
+        refund_cooldown_seconds: u64,
+        customer_cancel_window_seconds: u64,
     ) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
@@ -241,6 +254,16 @@ impl AhjoorRefundContract {
             .persistent()
             .set(&DataKey::PendingRefundQueue, &empty_queue);
 
+        // Issue #166: Store per-customer cooldown period (0 = no cooldown)
+        env.storage()
+            .instance()
+            .set(&DataKey::RefundCooldown, &refund_cooldown_seconds);
+
+        // Issue #168: Store customer cancel window
+        env.storage()
+            .instance()
+            .set(&DataKey::CustomerCancelWindow, &customer_cancel_window_seconds);
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -270,6 +293,26 @@ impl AhjoorRefundContract {
         // #157: Validate reason code (0-4)
         if reason_code > 4 {
             panic!("Invalid reason code: must be 0-4");
+        }
+
+        // #166: Enforce per-customer cooldown
+        let cooldown: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RefundCooldown)
+            .unwrap_or(0);
+        if cooldown > 0 {
+            let last_request: u64 = env
+                .storage()
+                .temporary()
+                .get(&DataKey::LastRefundRequest(customer.clone()))
+                .unwrap_or(0);
+            let now_ts = env.ledger().timestamp();
+            if last_request > 0 && now_ts.saturating_sub(last_request) < cooldown {
+                let next_eligible_at = last_request + cooldown;
+                events::emit_refund_cooldown_active(&env, customer.clone(), next_eligible_at);
+                panic!("RefundCooldownActive");
+            }
         }
 
         // --- Cross-contract validation (#64) ---
@@ -419,13 +462,23 @@ impl AhjoorRefundContract {
             Self::append_to_pending_queue(&env, refund_id);
         }
 
-        Self::update_stats_on_request(&env, &merchant, amount);
-
-        events::emit_refund_requested(&env, refund_id, customer, amount, token, refund.reason);
-        events::emit_refund_reason_recorded(&env, refund_id, reason_code);
         Self::update_stats_on_request(&env, &merchant, effective_amount);
 
+        // #166: Record this request timestamp in temporary storage (before customer is moved)
+        if cooldown > 0 {
+            let now_for_cooldown = env.ledger().timestamp();
+            env.storage()
+                .temporary()
+                .set(&DataKey::LastRefundRequest(customer.clone()), &now_for_cooldown);
+            env.storage().temporary().extend_ttl(
+                &DataKey::LastRefundRequest(customer.clone()),
+                INSTANCE_BUMP_AMOUNT,
+                INSTANCE_BUMP_AMOUNT,
+            );
+        }
+
         events::emit_refund_requested(&env, refund_id, customer, effective_amount, token, refund.reason);
+        events::emit_refund_reason_recorded(&env, refund_id, reason_code);
 
         if let (Some(tier_bps), Some(max_refundable)) = (applied_tier_bps, tier_max_refundable) {
             events::emit_refund_tier_applied(&env, refund_id, tier_bps, max_refundable);
@@ -442,7 +495,7 @@ impl AhjoorRefundContract {
         refund_id
     }
 
-    /// Approve a refund request. Only admin can call this.
+    /// Approve a refund request. Callable by admin or a delegate of the refund's merchant (#167).
     pub fn approve_refund(env: Env, admin: Address, refund_id: u32) {
         Self::require_not_paused(&env);
         admin.require_auth();
@@ -453,15 +506,19 @@ impl AhjoorRefundContract {
             .get(&DataKey::Admin)
             .expect("Not initialized");
 
-        if admin != stored_admin {
-            panic!("Only admin can approve refunds");
-        }
-
         let mut refund: Refund = env
             .storage()
             .persistent()
             .get(&DataKey::Refund(refund_id))
             .expect("Refund not found");
+
+        // #167: Allow admin OR a delegate of the refund's merchant
+        let is_admin = admin == stored_admin;
+        let is_delegate = !is_admin && Self::is_merchant_delegate(&env, &refund.merchant, &admin);
+
+        if !is_admin && !is_delegate {
+            panic!("Only admin or merchant delegate can approve refunds");
+        }
 
         if refund.status != RefundStatus::Requested {
             panic!("Refund is not in requested status");
@@ -484,6 +541,9 @@ impl AhjoorRefundContract {
 
         Self::update_stats_on_approve(&env, &refund.merchant);
 
+        if is_delegate {
+            events::emit_refund_approved_by_delegate(&env, refund_id, admin.clone());
+        }
         events::emit_refund_approved(&env, refund_id, admin, refund.approved_at.unwrap());
 
         env.storage()
@@ -491,7 +551,7 @@ impl AhjoorRefundContract {
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
-    /// Reject a refund request. Only admin can call this.
+    /// Reject a refund request. Callable by admin or a delegate of the refund's merchant (#167).
     pub fn reject_refund(env: Env, admin: Address, refund_id: u32, rejection_reason: String) {
         Self::require_not_paused(&env);
         admin.require_auth();
@@ -502,15 +562,19 @@ impl AhjoorRefundContract {
             .get(&DataKey::Admin)
             .expect("Not initialized");
 
-        if admin != stored_admin {
-            panic!("Only admin can reject refunds");
-        }
-
         let mut refund: Refund = env
             .storage()
             .persistent()
             .get(&DataKey::Refund(refund_id))
             .expect("Refund not found");
+
+        // #167: Allow admin OR a delegate of the refund's merchant
+        let is_admin = admin == stored_admin;
+        let is_delegate = !is_admin && Self::is_merchant_delegate(&env, &refund.merchant, &admin);
+
+        if !is_admin && !is_delegate {
+            panic!("Only admin or merchant delegate can reject refunds");
+        }
 
         if refund.status != RefundStatus::Requested {
             panic!("Refund is not in requested status");
@@ -896,6 +960,236 @@ impl AhjoorRefundContract {
             .persistent()
             .get(&DataKey::AutoApprovedMerchants)
             .unwrap_or(Vec::new(&env))
+    }
+
+    // -------------------------------------------------------------------------
+    // #166: Per-Customer Refund Request Cooldown Period
+    // -------------------------------------------------------------------------
+
+    /// Admin waives the cooldown for a specific customer for their next request only.
+    /// Removes the LastRefundRequest entry from temporary storage.
+    pub fn waive_cooldown(env: Env, admin: Address, customer: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage()
+            .temporary()
+            .remove(&DataKey::LastRefundRequest(customer));
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the configured refund cooldown in seconds.
+    pub fn get_refund_cooldown(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::RefundCooldown)
+            .unwrap_or(0)
+    }
+
+    // -------------------------------------------------------------------------
+    // #167: Delegated Refund Approval for Merchant Sub-Admins
+    // -------------------------------------------------------------------------
+
+    /// Add a delegate that can approve/reject refunds for a specific merchant.
+    /// Maximum 5 delegates per merchant. Only the merchant can call this.
+    pub fn add_delegate(env: Env, merchant: Address, delegate: Address) {
+        Self::require_not_paused(&env);
+        merchant.require_auth();
+
+        let key = DataKey::MerchantDelegates(merchant.clone());
+        let mut delegates: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+
+        if delegates.len() >= 5 {
+            panic!("Maximum 5 delegates per merchant");
+        }
+
+        for addr in delegates.iter() {
+            if addr == delegate {
+                panic!("Address is already a delegate");
+            }
+        }
+
+        delegates.push_back(delegate.clone());
+        env.storage().persistent().set(&key, &delegates);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        events::emit_delegate_added(&env, merchant, delegate);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Remove a delegate from a merchant's delegate list. Only the merchant can call this.
+    pub fn remove_delegate(env: Env, merchant: Address, delegate: Address) {
+        Self::require_not_paused(&env);
+        merchant.require_auth();
+
+        let key = DataKey::MerchantDelegates(merchant.clone());
+        let delegates: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+
+        let mut new_delegates = Vec::new(&env);
+        let mut found = false;
+        for addr in delegates.iter() {
+            if addr == delegate {
+                found = true;
+            } else {
+                new_delegates.push_back(addr);
+            }
+        }
+
+        if !found {
+            panic!("Address is not a delegate");
+        }
+
+        env.storage().persistent().set(&key, &new_delegates);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the list of delegates for a merchant.
+    pub fn get_delegates(env: Env, merchant: Address) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MerchantDelegates(merchant))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    // -------------------------------------------------------------------------
+    // #168: Refund Request Expiry with Auto-Cancellation
+    // -------------------------------------------------------------------------
+
+    /// Cancel a refund request. Only callable by the requesting customer while status is Requested.
+    /// Returns escrowed funds to the customer.
+    pub fn cancel_refund_request(env: Env, customer: Address, refund_id: u32) {
+        Self::require_not_paused(&env);
+        customer.require_auth();
+
+        let mut refund: Refund = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Refund(refund_id))
+            .expect("Refund not found");
+
+        if refund.customer != customer {
+            panic!("Only the requesting customer can cancel this refund");
+        }
+
+        if refund.status != RefundStatus::Requested {
+            panic!("Only Requested refunds can be cancelled");
+        }
+
+        // Return escrowed funds to customer
+        let client = token::Client::new(&env, &refund.token);
+        client.transfer(
+            &env.current_contract_address(),
+            &refund.customer,
+            &refund.amount,
+        );
+
+        refund.status = RefundStatus::Cancelled;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Refund(refund_id), &refund);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Refund(refund_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        // Remove from pending queue
+        Self::remove_from_pending_queue(&env, refund_id);
+
+        events::emit_refund_request_cancelled(&env, refund_id, customer);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Auto-cancel a refund request that has been in Requested status beyond
+    /// `customer_cancel_window_seconds`. Callable by anyone after the window expires.
+    /// Returns escrowed funds to the customer.
+    pub fn auto_cancel_expired_request(env: Env, refund_id: u32) {
+        Self::require_not_paused(&env);
+
+        let mut refund: Refund = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Refund(refund_id))
+            .expect("Refund not found");
+
+        if refund.status != RefundStatus::Requested {
+            panic!("Only Requested refunds can be auto-cancelled");
+        }
+
+        let cancel_window: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CustomerCancelWindow)
+            .expect("Customer cancel window not configured");
+
+        let now = env.ledger().timestamp();
+        if now < refund.requested_at + cancel_window {
+            panic!("Customer cancel window has not elapsed");
+        }
+
+        // Return escrowed funds to customer
+        let client = token::Client::new(&env, &refund.token);
+        client.transfer(
+            &env.current_contract_address(),
+            &refund.customer,
+            &refund.amount,
+        );
+
+        let cancelled_by = refund.customer.clone();
+        refund.status = RefundStatus::Cancelled;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Refund(refund_id), &refund);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Refund(refund_id),
+            PERSISTENT_LIFETIME_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        // Remove from pending queue
+        Self::remove_from_pending_queue(&env, refund_id);
+
+        events::emit_refund_request_cancelled(&env, refund_id, cancelled_by);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the configured customer cancel window in seconds.
+    pub fn get_customer_cancel_window(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::CustomerCancelWindow)
+            .expect("Customer cancel window not configured")
     }
 
     // -------------------------------------------------------------------------
@@ -1678,6 +1972,21 @@ impl AhjoorRefundContract {
     }
 
     // --- Helper Functions for Stats and Whitelist ---
+
+    /// Check if `caller` is a registered delegate for `merchant` (#167).
+    fn is_merchant_delegate(env: &Env, merchant: &Address, caller: &Address) -> bool {
+        let delegates: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MerchantDelegates(merchant.clone()))
+            .unwrap_or(Vec::new(env));
+        for addr in delegates.iter() {
+            if addr == *caller {
+                return true;
+            }
+        }
+        false
+    }
 
     fn is_merchant_auto_approved(env: &Env, merchant: &Address) -> bool {
         let whitelist: Vec<Address> = env
