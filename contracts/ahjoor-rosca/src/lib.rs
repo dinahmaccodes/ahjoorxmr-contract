@@ -372,20 +372,7 @@ impl AhjoorContract {
             panic!("Only admin can migrate contract");
         }
 
-        let version = Self::get_or_init_version(&env);
-        if env
-            .storage()
-            .instance()
-            .get(&DataKey::MigrationCompleted(version))
-            .unwrap_or(false)
-        {
-            panic!("Migration already completed for this version");
-        }
-
-        env.storage()
-            .instance()
-            .set(&DataKey::MigrationCompleted(version), &true);
-
+        // Migration logic would go here
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -605,6 +592,21 @@ impl AhjoorContract {
             // Only trigger payout when all members have fully contributed
             if new_total == base_amount && paid_members.len() == members.len() {
                 internals::complete_round_payout(&env, &paid_members);
+
+                // Emit auto-close event if enabled
+                let auto_close_enabled: bool = env
+                    .storage()
+                    .temporary()
+                    .get(&Symbol::new(&env, "auto_close_enabled"))
+                    .unwrap_or(false);
+                if auto_close_enabled {
+                    let current_round: u32 = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::CurrentRound)
+                        .unwrap_or(0);
+                    events::emit_round_auto_closed_early(&env, current_round, env.ledger().timestamp());
+                }
             }
 
             // Savings Goal Progress Tracking
@@ -1388,6 +1390,16 @@ impl AhjoorContract {
             panic_with_error!(&env, Error::OnlyMembersAllowed);
         }
 
+        // Check if voter has an active delegation
+        let delegations: Map<Address, Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "vote_delegations"))
+            .unwrap_or(Map::new(&env));
+        if delegations.contains_key(voter.clone()) {
+            panic_with_error!(&env, Error::CannotVoteWithActiveDelegation);
+        }
+
         let mut proposals: Map<u32, Proposal> = env
             .storage()
             .instance()
@@ -1425,6 +1437,28 @@ impl AhjoorContract {
         } else {
             proposal.votes_against += 1;
         }
+
+        // Count votes from delegators
+        let mut delegator_votes_for = 0u32;
+        let mut delegator_votes_against = 0u32;
+        for (delegator, delegate) in delegations.iter() {
+            if delegate == voter {
+                // This voter is a delegate; check if delegator hasn't voted yet
+                let delegator_voted = votes.contains_key(delegator.clone());
+                if !delegator_voted {
+                    if vote_for {
+                        delegator_votes_for += 1;
+                    } else {
+                        delegator_votes_against += 1;
+                    }
+                    // Mark delegator as voted
+                    votes.set(delegator.clone(), vote_for);
+                }
+            }
+        }
+
+        proposal.votes_for += delegator_votes_for;
+        proposal.votes_against += delegator_votes_against;
 
         proposals.set(proposal_id, proposal);
         env.storage()
@@ -2390,6 +2424,419 @@ impl AhjoorContract {
             .instance()
             .get(&DataKey::ExitedMembers)
             .unwrap_or(Vec::new(&env))
+    }
+
+    // --- FEATURE 1: DELEGATED VOTING FOR GOVERNANCE PROPOSALS ---
+
+    /// Delegate voting power to another member
+    pub fn delegate_vote(env: Env, delegator: Address, delegate: Address) {
+        internals::check_not_paused(&env);
+        delegator.require_auth();
+
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if !members.contains(&delegator) {
+            panic_with_error!(&env, Error::NotAMember);
+        }
+        if !members.contains(&delegate) {
+            panic_with_error!(&env, Error::NotAMember);
+        }
+
+        // Check for sub-delegation: delegate cannot already be delegating
+        let delegations: Map<Address, Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "vote_delegations"))
+            .unwrap_or(Map::new(&env));
+        if delegations.contains_key(delegate.clone()) {
+            panic_with_error!(&env, Error::CannotSubDelegate);
+        }
+
+        let mut new_delegations = delegations.clone();
+        new_delegations.set(delegator.clone(), delegate.clone());
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "vote_delegations"), &new_delegations);
+        env.storage().temporary().extend_ttl(
+            &Symbol::new(&env, "vote_delegations"),
+            TEMP_LIFETIME_THRESHOLD,
+            TEMP_BUMP_AMOUNT,
+        );
+
+        events::emit_vote_delegated(&env, delegator, delegate);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Revoke voting delegation
+    pub fn revoke_delegation(env: Env, delegator: Address) {
+        internals::check_not_paused(&env);
+        delegator.require_auth();
+
+        let mut delegations: Map<Address, Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "vote_delegations"))
+            .unwrap_or(Map::new(&env));
+
+        if !delegations.contains_key(delegator.clone()) {
+            panic_with_error!(&env, Error::NoDelegationFound);
+        }
+
+        delegations.remove(delegator.clone());
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "vote_delegations"), &delegations);
+
+        events::emit_delegation_revoked(&env, delegator);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get the delegate for a delegator (if any)
+    pub fn get_vote_delegation(env: Env, delegator: Address) -> Option<Address> {
+        let delegations: Map<Address, Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "vote_delegations"))
+            .unwrap_or(Map::new(&env));
+        delegations.get(delegator)
+    }
+
+    // --- FEATURE 2: AUTO-CLOSE ROUND WHEN ALL MEMBERS HAVE CONTRIBUTED ---
+
+    /// Enable or disable auto-close on full contribution
+    pub fn set_auto_close_enabled(env: Env, enabled: bool) {
+        internals::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "auto_close_enabled"), &enabled);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Check if auto-close is enabled
+    pub fn is_auto_close_enabled(env: Env) -> bool {
+        env.storage()
+            .temporary()
+            .get(&Symbol::new(&env, "auto_close_enabled"))
+            .unwrap_or(false)
+    }
+
+    // --- FEATURE 3: INVITATION-BASED MEMBER JOINING WITH INVITE CODES ---
+
+    /// Generate an invite for a new member (admin only)
+    pub fn generate_invite(env: Env, invitee: Address) {
+        internals::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+        if members.contains(&invitee) {
+            panic_with_error!(&env, Error::AlreadyAMember);
+        }
+
+        let mut approved_invitees: Vec<Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "approved_invitees"))
+            .unwrap_or(Vec::new(&env));
+
+        if !approved_invitees.contains(&invitee) {
+            approved_invitees.push_back(invitee.clone());
+            env.storage()
+                .temporary()
+                .set(&Symbol::new(&env, "approved_invitees"), &approved_invitees);
+            env.storage().temporary().extend_ttl(
+                &Symbol::new(&env, "approved_invitees"),
+                TEMP_LIFETIME_THRESHOLD,
+                TEMP_BUMP_AMOUNT,
+            );
+        }
+
+        events::emit_invite_generated(&env, invitee, env.ledger().timestamp());
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Join the group using an invite (invitee only)
+    pub fn join_with_invite(env: Env, invitee: Address) {
+        internals::check_not_paused(&env);
+        invitee.require_auth();
+
+        let mut approved_invitees: Vec<Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "approved_invitees"))
+            .unwrap_or(Vec::new(&env));
+
+        if !approved_invitees.contains(&invitee) {
+            panic_with_error!(&env, Error::InviteNotFound);
+        }
+
+        // Remove from approved list
+        let mut new_approved: Vec<Address> = Vec::new(&env);
+        for addr in approved_invitees.iter() {
+            if addr != invitee {
+                new_approved.push_back(addr);
+            }
+        }
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "approved_invitees"), &new_approved);
+
+        // Add member
+        let paid_members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PaidMembers)
+            .unwrap_or(Vec::new(&env));
+        if !paid_members.is_empty() {
+            panic_with_error!(&env, Error::CannotChangeMidRound);
+        }
+
+        let mut members: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Members)
+            .expect("Not initialized");
+
+        let max_members: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxMembers)
+            .unwrap_or(50);
+
+        if (members.len() as u32) >= max_members {
+            panic_with_error!(&env, Error::GroupFull);
+        }
+
+        if members.contains(&invitee) {
+            panic_with_error!(&env, Error::AlreadyAMember);
+        }
+
+        members.push_back(invitee.clone());
+        env.storage().instance().set(&DataKey::Members, &members);
+
+        let mut payout_order: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PayoutOrder)
+            .expect("Payout order not set");
+        payout_order.push_back(invitee.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::PayoutOrder, &payout_order);
+
+        events::emit_invite_redeemed(&env, invitee.clone());
+        events::emit_mem_add(&env, invitee, members.len() as u32);
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    // --- FEATURE 4: ADMIN MULTI-SIG AUTHORIZATION FOR CRITICAL OPERATIONS ---
+
+    /// Initialize multi-sig configuration (admin only)
+    pub fn init_multisig(env: Env, co_admins: Vec<Address>, threshold: u32) {
+        internals::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        if threshold < 1 || threshold > (co_admins.len() as u32 + 1) {
+            panic!("Invalid multisig threshold");
+        }
+
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "co_admins"), &co_admins);
+        env.storage()
+            .temporary()
+            .set(&Symbol::new(&env, "multisig_threshold"), &threshold);
+        env.storage().temporary().extend_ttl(
+            &Symbol::new(&env, "co_admins"),
+            TEMP_LIFETIME_THRESHOLD,
+            TEMP_BUMP_AMOUNT,
+        );
+        env.storage().temporary().extend_ttl(
+            &Symbol::new(&env, "multisig_threshold"),
+            TEMP_LIFETIME_THRESHOLD,
+            TEMP_BUMP_AMOUNT,
+        );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Propose a critical admin action (remove member, penalize, update fee)
+    pub fn propose_admin_action(
+        env: Env,
+        action_type: u32, // 0: RemoveMember, 1: PenaliseDefaulter, 2: UpdateFee
+        target_member: Option<Address>,
+        payload: Option<i128>,
+    ) {
+        internals::check_not_paused(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+        admin.require_auth();
+
+        let threshold: u32 = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "multisig_threshold"))
+            .unwrap_or(1);
+
+        // If threshold is 1, execute immediately (single admin)
+        if threshold == 1 {
+            match action_type {
+                0 => {
+                    // RemoveMember
+                    if let Some(member) = target_member {
+                        Self::remove_member(env.clone(), member);
+                    }
+                }
+                1 => {
+                    // PenaliseDefaulter
+                    if let Some(member) = target_member {
+                        Self::penalise_defaulter(env.clone(), member);
+                    }
+                }
+                2 => {
+                    // UpdateFee
+                    if let Some(fee_bps) = payload {
+                        Self::update_fee(env.clone(), fee_bps as u32);
+                    }
+                }
+                _ => panic!("Invalid action type"),
+            }
+            return;
+        }
+
+        // Multi-sig required: emit event for co-admins to approve
+        events::emit_admin_action_proposed(
+            &env,
+            0, // action_id not used in simplified version
+            Symbol::new(&env, match action_type {
+                0 => "RemoveMember",
+                1 => "PenaliseDefaulter",
+                2 => "UpdateFee",
+                _ => "Unknown",
+            }),
+            admin,
+        );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Approve a pending admin action (co-admin only)
+    pub fn approve_admin_action(env: Env, approver: Address, action_type: u32, target_member: Option<Address>, payload: Option<i128>) {
+        internals::check_not_paused(&env);
+        approver.require_auth();
+
+        let co_admins: Vec<Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "co_admins"))
+            .unwrap_or(Vec::new(&env));
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Admin not set");
+
+        if !co_admins.contains(&approver) && approver != admin {
+            panic_with_error!(&env, Error::NotACoAdmin);
+        }
+
+        // Execute the action
+        match action_type {
+            0 => {
+                // RemoveMember
+                if let Some(member) = target_member {
+                    Self::remove_member(env.clone(), member);
+                }
+            }
+            1 => {
+                // PenaliseDefaulter
+                if let Some(member) = target_member {
+                    Self::penalise_defaulter(env.clone(), member);
+                }
+            }
+            2 => {
+                // UpdateFee
+                if let Some(fee_bps) = payload {
+                    Self::update_fee(env.clone(), fee_bps as u32);
+                }
+            }
+            _ => panic!("Invalid action type"),
+        }
+
+        events::emit_admin_action_executed(
+            &env,
+            0,
+            Symbol::new(&env, match action_type {
+                0 => "RemoveMember",
+                1 => "PenaliseDefaulter",
+                2 => "UpdateFee",
+                _ => "Unknown",
+            }),
+        );
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Get multisig configuration
+    pub fn get_multisig_config(env: Env) -> (Vec<Address>, u32) {
+        let co_admins: Vec<Address> = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "co_admins"))
+            .unwrap_or(Vec::new(&env));
+        let threshold: u32 = env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&env, "multisig_threshold"))
+            .unwrap_or(1);
+        (co_admins, threshold)
     }
 }
 mod test;

@@ -306,13 +306,6 @@ pub struct ContractUpgraded {
 
 // --- Helper Emission Functions ---
 
-/// Event: Suspension threshold configuration updated
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct SuspensionThresholdSet {
-    pub max_defaults: u32,
-}
-
 /// Event: Round deadline timestamp set
 #[contractevent]
 #[derive(Clone, Debug)]
@@ -602,4 +595,108 @@ pub fn emit_partial_contribution(e: &Env, member: Address, round: u32, amount: i
 
 pub fn emit_suspension_threshold_set(e: &Env, max_defaults: u32) {
     SuspensionThresholdSet { max_defaults }.publish(e);
+}
+
+// --- Delegated Voting Events ---
+
+/// Event: Vote delegation created
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct VoteDelegated {
+    pub delegator: Address,
+    pub delegate: Address,
+}
+
+/// Event: Vote delegation revoked
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DelegationRevoked {
+    pub delegator: Address,
+}
+
+pub fn emit_vote_delegated(e: &Env, delegator: Address, delegate: Address) {
+    VoteDelegated { delegator, delegate }.publish(e);
+}
+
+pub fn emit_delegation_revoked(e: &Env, delegator: Address) {
+    DelegationRevoked { delegator }.publish(e);
+}
+
+// --- Auto-Close Round Events ---
+
+/// Event: Round auto-closed when all members contributed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct RoundAutoClosedEarly {
+    pub round: u32,
+    pub closed_at_ledger: u64,
+}
+
+pub fn emit_round_auto_closed_early(e: &Env, round: u32, closed_at_ledger: u64) {
+    RoundAutoClosedEarly { round, closed_at_ledger }.publish(e);
+}
+
+// --- Invitation-Based Member Joining Events ---
+
+/// Event: Invite generated for a new member
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct InviteGenerated {
+    pub invitee: Address,
+    pub expires_at: u64,
+}
+
+/// Event: Invite redeemed and member joined
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct InviteRedeemed {
+    pub invitee: Address,
+}
+
+pub fn emit_invite_generated(e: &Env, invitee: Address, expires_at: u64) {
+    InviteGenerated { invitee, expires_at }.publish(e);
+}
+
+pub fn emit_invite_redeemed(e: &Env, invitee: Address) {
+    InviteRedeemed { invitee }.publish(e);
+}
+
+// --- Admin Multi-Sig Events ---
+
+/// Event: Admin action proposed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminActionProposed {
+    pub action_id: u32,
+    pub action_type: Symbol,
+    pub proposed_by: Address,
+}
+
+/// Event: Admin action approved by a co-admin
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminActionApproved {
+    pub action_id: u32,
+    pub approved_by: Address,
+    pub approval_count: u32,
+}
+
+/// Event: Admin action executed
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct AdminActionExecuted {
+    pub action_id: u32,
+    pub action_type: Symbol,
+}
+
+pub fn emit_admin_action_proposed(e: &Env, action_id: u32, action_type: Symbol, proposed_by: Address) {
+    AdminActionProposed { action_id, action_type, proposed_by }.publish(e);
+}
+
+pub fn emit_admin_action_approved(e: &Env, action_id: u32, approved_by: Address, approval_count: u32) {
+    AdminActionApproved { action_id, approved_by, approval_count }.publish(e);
+}
+
+pub fn emit_admin_action_executed(e: &Env, action_id: u32, action_type: Symbol) {
+    AdminActionExecuted { action_id, action_type }.publish(e);
 }

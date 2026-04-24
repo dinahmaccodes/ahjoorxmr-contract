@@ -45,4 +45,30 @@ pub enum Error {
     GroupFull = 36,
     /// Invalid maximum member count (must be between 1 and 100).
     InvalidMaxMembers = 37,
+    /// Delegation already exists for this delegator.
+    DelegationAlreadyExists = 38,
+    /// No delegation found for this delegator.
+    NoDelegationFound = 39,
+    /// Delegator cannot vote while delegation is active.
+    CannotVoteWithActiveDelegation = 40,
+    /// Delegate cannot further sub-delegate.
+    CannotSubDelegate = 41,
+    /// Invite not found or expired.
+    InviteNotFound = 42,
+    /// Invite has already been redeemed.
+    InviteAlreadyRedeemed = 43,
+    /// Invite is for a different address.
+    InviteWrongRecipient = 44,
+    /// Admin action not found.
+    AdminActionNotFound = 45,
+    /// Admin action has already been executed.
+    AdminActionAlreadyExecuted = 46,
+    /// Admin action has expired.
+    AdminActionExpired = 47,
+    /// Admin has already approved this action.
+    AdminAlreadyApproved = 48,
+    /// Insufficient approvals for admin action.
+    InsufficientApprovals = 49,
+    /// Not a co-admin.
+    NotACoAdmin = 50,
 }

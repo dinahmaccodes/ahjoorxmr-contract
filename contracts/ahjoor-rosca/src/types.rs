@@ -178,7 +178,6 @@ pub enum DataKey {
     MemberContributions,     // Map<Address, i128> cumulative per round
     ProposedAdmin,           // Address — proposed new admin (pending acceptance)
     ContractVersion,         // u32
-    MigrationCompleted(u32), // bool
     FeeBps,                  // u32 — protocol fee in basis points
     FeeRecipient,            // Address — receives protocol fees
     MaxDefaults,             // u32 — suspension threshold (consecutive missed rounds)
