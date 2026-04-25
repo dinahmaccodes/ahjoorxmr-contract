@@ -12,7 +12,7 @@ const PERSISTENT_BUMP_AMOUNT: u32 = 120_000;
 // Minimal payment contract client — only the fields we need from get_payment.
 // ---------------------------------------------------------------------------
 mod payment_contract {
-    use soroban_sdk::{contractclient, contracttype, Address, Env, Map, String};
+    use soroban_sdk::{contractclient, contracttype, Address, Env, Map, String, Vec};
 
     #[contracttype]
     #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,6 +22,14 @@ mod payment_contract {
         Refunded = 2,
         Disputed = 3,
         Expired = 4,
+        ScheduledPending = 5,
+    }
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct SplitRecipient {
+        pub recipient: Address,
+        pub bps: u32,
     }
 
     #[contracttype]
@@ -38,6 +46,8 @@ mod payment_contract {
         pub refunded_amount: i128,
         pub reference: Option<String>,
         pub metadata: Option<Map<String, String>>,
+        pub split_recipients: Option<Vec<SplitRecipient>>,
+        pub execute_after: u64,
     }
 
     #[allow(dead_code)]
@@ -150,29 +160,54 @@ pub enum DataKey {
 
 mod events;
 
+/// Optional extended configuration for `initialize`.
+/// Groups the extra parameters that would otherwise exceed Soroban's 10-parameter limit.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundInitConfig {
+    pub escrow_contract: Option<Address>,
+    pub refund_fee_bps: u32,
+    pub fee_recipient: Option<Address>,
+    pub auto_reject_window_seconds: u64,
+    pub appeal_window_seconds: u64,
+    pub refund_tiers: Option<Vec<(u64, u32)>>,
+    pub refund_cooldown_seconds: u64,
+    pub customer_cancel_window_seconds: u64,
+}
+
 #[contract]
 pub struct AhjoorRefundContract;
 
 #[contractimpl]
 impl AhjoorRefundContract {
-    /// Initialize the refund contract with an admin, the payment contract address, a
-    /// `dispute_window` (in seconds), optional escrow contract address, refund fee parameters,
-    /// auto-reject window, appeal window, refund tiers, cooldown seconds (#166), and
-    /// customer cancel window (#168).
+    /// Initialize the refund contract.
+    /// `config` bundles optional extended settings to stay within Soroban's 10-parameter limit.
+    /// Pass `None` for `config` to use all defaults (zero fees, no cooldown, etc.).
     pub fn initialize(
         env: Env,
         admin: Address,
         payment_contract: Address,
         dispute_window: u64,
-        escrow_contract: Option<Address>,
-        refund_fee_bps: u32,
-        fee_recipient: Option<Address>,
-        auto_reject_window_seconds: u64,
-        appeal_window_seconds: u64,
-        refund_tiers: Option<Vec<(u64, u32)>>,
-        refund_cooldown_seconds: u64,
-        customer_cancel_window_seconds: u64,
+        config: Option<RefundInitConfig>,
     ) {
+        let cfg = config.unwrap_or(RefundInitConfig {
+            escrow_contract: None,
+            refund_fee_bps: 0,
+            fee_recipient: None,
+            auto_reject_window_seconds: 0,
+            appeal_window_seconds: 0,
+            refund_tiers: None,
+            refund_cooldown_seconds: 0,
+            customer_cancel_window_seconds: 0,
+        });
+        let escrow_contract = cfg.escrow_contract;
+        let refund_fee_bps = cfg.refund_fee_bps;
+        let fee_recipient = cfg.fee_recipient;
+        let auto_reject_window_seconds = cfg.auto_reject_window_seconds;
+        let appeal_window_seconds = cfg.appeal_window_seconds;
+        let refund_tiers = cfg.refund_tiers;
+        let refund_cooldown_seconds = cfg.refund_cooldown_seconds;
+        let customer_cancel_window_seconds = cfg.customer_cancel_window_seconds;
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
         }
@@ -685,9 +720,11 @@ impl AhjoorRefundContract {
             token: payment.token.clone(),
             status: RefundStatus::Processed,
             reason: String::from_str(&env, "merchant_initiated"),
+            reason_code: 4, // "Other" — merchant-initiated
             requested_at: now,
             approved_at: Some(now),
             processed_at: Some(now),
+            rejected_at: None,
             auto_approved_source: Some(String::from_str(&env, "merchant_direct")),
             escrow_id: None,
             fee_amount: None,
